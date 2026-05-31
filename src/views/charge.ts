@@ -164,9 +164,12 @@ export function stopCharge(): void {
   activeConfig = null;
   activeBridge = null;
 
+  // bridge.shutDownPageContainer はアプリ自体を終了させる API のため呼ばない
+  // (v0.1.7 で blank、v0.1.14 で diary から削除済みの仕様)。
+  // 現状 charge view は state/view.ts の ORDER から外れているのでここに到達
+  // しないはずだが、将来 charge を再投入したときの事故を避けるためにも削除。
   if (bridge !== null && containerCreated) {
     containerCreated = false;
-    void bridge.shutDownPageContainer();
   }
 }
 
