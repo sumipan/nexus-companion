@@ -1,13 +1,12 @@
 import { waitForEvenAppBridge } from "@evenrealities/even_hub_sdk";
 
 import { loadConfig } from "./config";
+import { initDiaryView } from "./views/diary";
 
 async function main(): Promise<void> {
-  await waitForEvenAppBridge();
+  const bridge = await waitForEvenAppBridge();
   const config = loadConfig();
-  // config.chargeServerUrl, config.ghdagUiUrl を以降の処理で使用
-  void config.chargeServerUrl;
-  void config.ghdagUiUrl;
+  initDiaryView(bridge, config);
 }
 
 main().catch((error: unknown) => {
