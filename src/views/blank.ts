@@ -30,11 +30,14 @@ export function registerBlankLifecycle(bridge: EvenAppBridge): () => void {
     if (blankActive) return;
     blankActive = true;
     try {
+      // content: "" (空文字列) を送ると SDK で no-op 扱いになり前 view の glass
+      // 描画が残ってしまう。半角スペース 1 個を送ることで「空白の更新」を確実に
+      // 投げて glass を実質クリアする。
       await bridge.textContainerUpgrade(
         new TextContainerUpgrade({
           containerID: 1,
           containerName: "main",
-          content: "",
+          content: " ",
         }),
       );
     } catch (e) {
