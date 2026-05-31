@@ -3,45 +3,82 @@ import {
   type EvenAppBridge,
 } from "@evenrealities/even_hub_sdk";
 
+import { fetchMessage } from "../api/message.ts";
+import type { Result } from "../api/types.ts";
+import type { Config } from "../config.ts";
 import { getView, subscribe, type ViewName } from "../state/view.ts";
 
 /**
- * 何も表示しない View。
+ * blank View
  *
- * 起動時の default。普段は glass に何も出さず、テンプル単タップで
- * diary → dashboard → blank と循環する（charge は v0.2.0 で再投入予定）。
+ * 起動時の default。秘書エージェントからの一言 (`${NIKKI_ROOT}/message.txt`
+ * の本文) を glass に表示する。message.txt が無い時は空白 1 文字で
+ * glass をクリアするだけにとどめる (`textContainerUpgrade({content: ""})` は
+ * SDK で no-op になり前 view の描画が残るため半角スペース 1 個を送る)。
  *
- * 実装メモ:
- * - v0.1.6 で blank activate 時に `bridge.shutDownPageContainer()` を呼んだら
- *   bridge の event 流入自体が止まる事象が実機で確認された。
- *   `shutDownPageContainer(exitMode?)` はアプリ終了系の API なので呼ばない。
- * - 別 view からの戻りで blank に来た場合は、glass に前 view の内容が残ってしまう
- *   ので `textContainerUpgrade({content: ""})` を呼んで空に上書きする。bootstrap
- *   で立てた containerID=1 / isEventCapture=1 の container を再利用するので
- *   event capture も維持される。
- * - 初回起動 (getView() === "blank") でも同じ `textContainerUpgrade` を呼ぶ。
- *   bootstrap の create container は初期 content="" だが、明示的に上書きしておく
- *   ことで「blank == 空 content」の不変条件を強化する。
+ * 実装メモ (経緯):
+ * - `bridge.shutDownPageContainer()` はアプリ終了系の API なので呼ばない
+ *   (v0.1.7 で確認済み)。
+ * - bootstrap で立てた containerID=1 / isEventCapture=1 の container を共有し、
+ *   textContainerUpgrade で content だけ書き換える。
  */
-export function registerBlankLifecycle(bridge: EvenAppBridge): () => void {
-  let blankActive = false;
 
-  async function activate(): Promise<void> {
-    if (blankActive) return;
-    blankActive = true;
+const CONTAINER_ID = 1;
+const CONTAINER_NAME = "main";
+const CLEAR_CONTENT = " "; // 空文字列は no-op になるので半角スペース 1 個で上書き
+const POLL_INTERVAL_MS = 60_000;
+
+// preload cache
+let cachedMessage: Result<string> | null = null;
+let inflightMessage: Promise<Result<string>> | null = null;
+
+async function fetchMessageWithCache(
+  config: Config,
+): Promise<Result<string>> {
+  if (inflightMessage) return inflightMessage;
+  inflightMessage = fetchMessage(config).then((r) => {
+    cachedMessage = r;
+    inflightMessage = null;
+    return r;
+  });
+  return inflightMessage;
+}
+
+/** bootstrap で fire-and-forget で呼ぶ。背景で fetch して cache。 */
+export function preloadMessage(config: Config): Promise<Result<string>> {
+  return fetchMessageWithCache(config);
+}
+
+function resultToContent(result: Result<string>): string {
+  if (result.ok) {
+    const trimmed = result.data.replace(/\s+$/g, "");
+    return trimmed.length === 0 ? CLEAR_CONTENT : trimmed;
+  }
+  // "メッセージ未配置" は運用上頻繁にあるので glass を空にする (主張弱め)。
+  // fetch エラー (サーバに接続できません等) はそのまま表示する。
+  if (result.error === "メッセージ未配置") {
+    return CLEAR_CONTENT;
+  }
+  return result.error;
+}
+
+export function registerBlankLifecycle(
+  bridge: EvenAppBridge,
+  config: Config,
+): () => void {
+  let blankActive = false;
+  let pollTimer: ReturnType<typeof setInterval> | undefined;
+
+  async function applyContent(content: string): Promise<void> {
     try {
-      // content: "" (空文字列) を送ると SDK で no-op 扱いになり前 view の glass
-      // 描画が残ってしまう。半角スペース 1 個を送ることで「空白の更新」を確実に
-      // 投げて glass を実質クリアする。
       await bridge.textContainerUpgrade(
         new TextContainerUpgrade({
-          containerID: 1,
-          containerName: "main",
-          content: " ",
+          containerID: CONTAINER_ID,
+          containerName: CONTAINER_NAME,
+          content,
         }),
       );
     } catch (e) {
-      // textContainerUpgrade が失敗しても (container 未作成等)、アプリは継続
       // eslint-disable-next-line no-console
       console.warn(
         "[blank] textContainerUpgrade failed:",
@@ -50,8 +87,34 @@ export function registerBlankLifecycle(bridge: EvenAppBridge): () => void {
     }
   }
 
+  async function refresh(): Promise<void> {
+    const result = await fetchMessageWithCache(config);
+    if (!blankActive) return;
+    await applyContent(resultToContent(result));
+  }
+
+  async function activate(): Promise<void> {
+    if (blankActive) return;
+    blankActive = true;
+    // cache hit があれば即描画
+    if (cachedMessage !== null) {
+      await applyContent(resultToContent(cachedMessage));
+      // 背景で最新化
+      void refresh();
+    } else {
+      await refresh();
+    }
+    pollTimer = setInterval(() => {
+      void refresh();
+    }, POLL_INTERVAL_MS);
+  }
+
   function deactivate(): void {
     blankActive = false;
+    if (pollTimer !== undefined) {
+      clearInterval(pollTimer);
+      pollTimer = undefined;
+    }
   }
 
   const unsubscribe = subscribe((view: ViewName) => {
@@ -66,5 +129,8 @@ export function registerBlankLifecycle(bridge: EvenAppBridge): () => void {
     void activate();
   }
 
-  return unsubscribe;
+  return () => {
+    unsubscribe();
+    deactivate();
+  };
 }

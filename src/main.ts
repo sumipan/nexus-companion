@@ -57,7 +57,7 @@ import {
 
 import { loadConfig } from "./config";
 import { dispatchTextEvent, nextView } from "./state/view";
-import { registerBlankLifecycle } from "./views/blank";
+import { preloadMessage, registerBlankLifecycle } from "./views/blank";
 import {
   preloadCharge,
   preloadDashboard,
@@ -122,8 +122,8 @@ async function main(): Promise<void> {
     log(`init container failed: ${e instanceof Error ? e.message : String(e)}`);
   }
 
-  registerBlankLifecycle(bridge);
-  log("5b: blank lifecycle registered (default view)");
+  registerBlankLifecycle(bridge, config);
+  log("5b: blank lifecycle registered (default view, shows secretary message)");
 
   initDiaryView(bridge, config);
   log("6: diary view registered");
@@ -136,10 +136,11 @@ async function main(): Promise<void> {
   // 失敗結果も cache に入るので 1 回目の表示も即出る (古いエラー文字列だが)。
   // bridge.onEvenHubEvent の登録より前に kick して、register 中にも fetch が
   // 進むようにする。
+  void preloadMessage(config);
   void preloadDiary(config);
   void preloadDashboard(config);
   void preloadCharge(config);
-  log("8a: preload kicked (diary / dashboard / charge)");
+  log("8a: preload kicked (message / diary / dashboard / charge)");
 
   // 右テンプルタップ間隔のデバウンス（同一タップで複数 event が飛ぶケースに備える）
   let lastTriggerAt = 0;
