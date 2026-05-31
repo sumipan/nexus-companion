@@ -109,7 +109,17 @@ export function initDiaryView(bridge: EvenAppBridge, config: Config): () => void
     }
     diaryActive = true;
     pageIndex = 0;
-    await createContainer();
+    // bootstrap (main.ts) で containerID=1 / isEventCapture=1 の container を既に
+    // create 済みなので、ここでは create を呼ばない。textContainerUpgrade で
+    // content を上書きするだけ。
+    //
+    // v0.1.11 までは `await createContainer()` を呼んでいたが、SDK 仕様で
+    // 2 回目以降の `createStartUpPageContainer` 呼び出しの挙動は未定義
+    // (README: "You **must** call createStartUpPageContainer **first**...")。
+    // 2 回目呼び出しが SDK 内部状態を壊し、その後の bridge event 流入を停止
+    // させていた可能性が高い (実機で 2 タップ目以降届かない症状)。
+    //
+    // await createContainer();
     await loadAndDisplay();
     pollTimer = setInterval(() => {
       void loadAndDisplay();
