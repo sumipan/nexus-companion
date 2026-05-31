@@ -1,0 +1,59 @@
+name: Build .ehpk on main
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: ".nvmrc"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # release.yml がタグ起動で app.json の version をタグから同期する。
+      # main 起動の本ワークフローでは app.json はそのまま（dev ビルド）。
+      - name: Build web app (LAN endpoints)
+        env:
+          VITE_CHARGE_SERVER_URL: http://100.100.80.120:8088
+          VITE_GHDAG_UI_URL: http://100.100.80.120:8080
+        run: npm run build
+
+      - name: Pack .ehpk
+        run: |
+          npx evenhub pack app.json dist -o nexus-companion.ehpk
+          if [ ! -f nexus-companion.ehpk ]; then
+            echo "nexus-companion.ehpk was not created"
+            exit 1
+          fi
+          ls -la nexus-companion.ehpk
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nexus-companion-main-${{ github.sha }}
+          path: nexus-companion.ehpk
+          retention-days: 14
+          if-no-files-found: error
