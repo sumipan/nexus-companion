@@ -92,11 +92,30 @@ async function main(): Promise<void> {
   log("8: charge lifecycle registered");
 
   bridge.onEvenHubEvent((event) => {
-    log(`event: ${JSON.stringify(event).slice(0, 300)}`);
-    if (
-      event.sysEvent?.eventType === OsEventTypeList.DOUBLE_CLICK_EVENT &&
-      event.sysEvent?.eventSource === EventSourceType.TOUCH_EVENT_FROM_GLASSES_R
+    // event の型 / source を enum 名でデコードして log する
+    const sys = event.sysEvent;
+    const typeName =
+      sys?.eventType !== undefined
+        ? `${OsEventTypeList[sys.eventType] ?? "?"}(${sys.eventType})`
+        : "(none)";
+    const sourceName =
+      sys?.eventSource !== undefined
+        ? `${EventSourceType[sys.eventSource] ?? "?"}(${sys.eventSource})`
+        : "(none)";
+    const textEvt = event.textEvent ? ` text=${JSON.stringify(event.textEvent)}` : "";
+    log(`event: type=${typeName} source=${sourceName}${textEvt}`);
+
+    // ダブルタップが OS に握られていて DOUBLE_CLICK_EVENT が届かない仮説に備え、
+    // 右テンプルの **シングルクリック** でも nextView() を呼ぶ fallback を入れる。
+    // ついでに source 不問で DOUBLE_CLICK も受ける（実機ログ上 source が欠ける挙動を考慮）。
+    if (sys?.eventType === OsEventTypeList.DOUBLE_CLICK_EVENT) {
+      log("→ nextView() trigger: DOUBLE_CLICK");
+      nextView();
+    } else if (
+      sys?.eventType === OsEventTypeList.CLICK_EVENT &&
+      sys?.eventSource === EventSourceType.TOUCH_EVENT_FROM_GLASSES_R
     ) {
+      log("→ nextView() trigger: right-temple CLICK");
       nextView();
     }
   });
