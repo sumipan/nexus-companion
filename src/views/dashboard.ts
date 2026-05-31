@@ -1,7 +1,6 @@
 import {
   EvenAppBridge,
-  RebuildPageContainer,
-  TextContainerProperty,
+  TextContainerUpgrade,
 } from "@evenrealities/even_hub_sdk";
 
 import {
@@ -63,25 +62,26 @@ export function countsEqual(
   return true;
 }
 
-function buildPageContainer(content: string): RebuildPageContainer {
-  return new RebuildPageContainer({
-    containerTotalNum: 1,
-    textObject: [
-      new TextContainerProperty({
-        containerID: 1,
-        content,
-        // glasses display 576x288 px をフルに使う（diary view と統一）
-        xPosition: 0,
-        yPosition: 0,
-        width: 576,
-        height: 288,
-        // rebuildPageContainer は container 構造を再構築するため、ここで
-        // isEventCapture を指定しないと 0 にリセットされ、その後のテンプル
-        // event が OS に拾われて view 切替ができなくなる。必ず維持する。
-        isEventCapture: 1,
-      }),
-    ],
-  });
+/**
+ * bootstrap で作った containerID=1 の TextContainer に content だけ流す。
+ *
+ * 以前は rebuildPageContainer を使っていたが、v0.1.9 でも `isEventCapture: 1`
+ * を明示しても dashboard 遷移後にタップが届かなくなる事象が継続 (rebuildPage
+ * Container は container 構造を再構築する API なので、isEventCapture の指定が
+ * あっても何かしらの形で event capture を破壊している模様)。
+ *
+ * textContainerUpgrade は content だけ更新する API で container 構造を触らない
+ * ので、bootstrap で立てた isEventCapture=1 がそのまま維持される。diary view と
+ * 同じパターン。
+ */
+async function applyContent(bridge: EvenAppBridge, content: string): Promise<void> {
+  await bridge.textContainerUpgrade(
+    new TextContainerUpgrade({
+      containerID: 1,
+      containerName: "main",
+      content,
+    }),
+  );
 }
 
 async function pollOnce(): Promise<void> {
@@ -91,7 +91,7 @@ async function pollOnce(): Promise<void> {
 
   const result = await fetchGhdagRows(activeConfig);
   if (!result.ok) {
-    await activeBridge.rebuildPageContainer(buildPageContainer(result.error));
+    await applyContent(activeBridge, result.error);
     return;
   }
 
@@ -101,9 +101,7 @@ async function pollOnce(): Promise<void> {
   }
 
   previousCounts = new Map(counts);
-  await activeBridge.rebuildPageContainer(
-    buildPageContainer(buildSummaryText(counts)),
-  );
+  await applyContent(activeBridge, buildSummaryText(counts));
 }
 
 export function startDashboard(config: Config, bridge: EvenAppBridge): void {
