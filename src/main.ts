@@ -55,6 +55,7 @@ import {
 
 import { loadConfig } from "./config";
 import { nextView } from "./state/view";
+import { registerBlankLifecycle } from "./views/blank";
 import { registerChargeLifecycle } from "./views/charge";
 import { registerDashboardLifecycle } from "./views/dashboard";
 import { initDiaryView } from "./views/diary";
@@ -81,6 +82,9 @@ async function main(): Promise<void> {
 
   const config = loadConfig();
   log(`5: config = ${JSON.stringify(config)}`);
+
+  registerBlankLifecycle(bridge);
+  log("5b: blank lifecycle registered (default view)");
 
   initDiaryView(bridge, config);
   log("6: diary view registered");
