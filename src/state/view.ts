@@ -1,14 +1,14 @@
 import type { Text_ItemEvent } from "@evenrealities/even_hub_sdk";
 
 export type ViewName = "blank" | "diary" | "dashboard" | "charge";
-// blank を起動時 default にし、テンプル単タップで diary → dashboard → blank と循環。
-// 普段は何も表示せず、見たい時だけタップで切り替える運用。
+// blank を起動時 default にし、テンプル単タップで diary → dashboard → charge →
+// blank と循環。普段は何も表示せず、見たい時だけタップで切り替える運用。
 //
-// 注: "charge" は ImageContainer のみで構成されており isEventCapture を持つ
-// TextContainer が存在しない → charge に切り替わると即座に event capture が失われ、
-// 以降のタップが届かなくなる。v0.2.0 で image + text 同居の container 設計に
-// 作り直したうえで再投入する。それまで rotation からは外す。
-const ORDER: ViewName[] = ["blank", "diary", "dashboard"];
+// charge view は v0.1.15 まで ImageContainer のみで構成され event capture を
+// 維持できなかったが、bootstrap で立てた共有 TextContainer (containerID=1,
+// isEventCapture=1) に textContainerUpgrade で ASCII バーグラフを流す設計に
+// 作り直して再投入した。
+const ORDER: ViewName[] = ["blank", "diary", "dashboard", "charge"];
 
 type Listener = (v: ViewName) => void;
 let current: ViewName = "blank";
