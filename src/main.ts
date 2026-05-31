@@ -48,8 +48,10 @@ log(
 
 // 動的 import を避ける（vite は IIFE bundle で全部固める）
 import {
+  CreateStartUpPageContainer,
   EventSourceType,
   OsEventTypeList,
+  TextContainerProperty,
   waitForEvenAppBridge,
 } from "@evenrealities/even_hub_sdk";
 
@@ -82,6 +84,40 @@ async function main(): Promise<void> {
 
   const config = loadConfig();
   log(`5: config = ${JSON.stringify(config)}`);
+
+  // ───────── event capture 用 container を起動時に 1 回 create ─────────
+  // SDK の `isEventCapture: 1` を持つ container が glass 上に無いと、OS は
+  // テンプル event をアプリに送らず OS デフォルト動作（ダッシュボードに戻る）に
+  // 消化してしまう。blank が default の構成で create が呼ばれないと event 自体
+  // 届かなくなる事象が実機で確認されたため、bootstrap で空 content の container
+  // を 1 個だけ作って event capture を成立させる。
+  //
+  // 後続の各 view (diary / dashboard / charge) は同じ containerID=1 に対して
+  // textContainerUpgrade / rebuildPageContainer で content を上書きする。
+  // 既存 diary.ts も createStartUpPageContainer を呼ぶが、SDK 仕様で
+  // 2 回目以降の create は戻り値 1（失敗）を返すだけで害は無く、続く
+  // textContainerUpgrade は同じ container 上で動く。
+  try {
+    const initContainer = new CreateStartUpPageContainer({
+      containerTotalNum: 1,
+      textObject: [
+        new TextContainerProperty({
+          containerID: 1,
+          containerName: "main",
+          content: "",
+          isEventCapture: 1,
+          xPosition: 0,
+          yPosition: 0,
+          width: 576,
+          height: 288,
+        }),
+      ],
+    });
+    const r = await bridge.createStartUpPageContainer(initContainer);
+    log(`5a: initial container created (returned: ${JSON.stringify(r)})`);
+  } catch (e) {
+    log(`init container failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
 
   registerBlankLifecycle(bridge);
   log("5b: blank lifecycle registered (default view)");
