@@ -114,11 +114,17 @@ export function initDiaryView(bridge: EvenAppBridge, config: Config): () => void
     pollTimer = setInterval(() => {
       void loadAndDisplay();
     }, POLL_INTERVAL_MS);
-    unsubscribeEvents = bridge.onEvenHubEvent((event) => {
-      if (event.textEvent) {
-        handleTextEvent(event.textEvent);
-      }
-    });
+    // v0.1.10 で実機検証したところ、ここで bridge.onEvenHubEvent を別途登録すると
+    // main.ts 側で登録した TOUCH event リスナーが上書きされて view 切替が止まる
+    // 事象が確認された (SDK の onEvenHubEvent は後勝ち / 単一 listener 仕様の模様)。
+    // → diary 内の textEvent ハンドリング (ページスクロール) は v0.2.0 で main.ts
+    //    から dispatch する設計に変えるまで一時的に無効化する。
+    //
+    // unsubscribeEvents = bridge.onEvenHubEvent((event) => {
+    //   if (event.textEvent) {
+    //     handleTextEvent(event.textEvent);
+    //   }
+    // });
   }
 
   async function deactivateDiary(): Promise<void> {
