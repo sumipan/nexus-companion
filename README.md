@@ -14,6 +14,28 @@ npm run build
 
 Node.js 20 系を使用してください（`.nvmrc` 参照）。
 
+## スクリーンショット
+
+evenhub-simulator 上での 3 ビュー確認結果（Issue #1625）:
+
+| ビュー | 説明 |
+|--------|------|
+| Diary | `${NIKKI_ROOT}/日記/YYYY-MM-DD.md` の先頭ページ（10 行） |
+| Dashboard | ghdag `/api/rows` から集計したタスク件数サマリ |
+| Charge | Claude 週次 / Cursor 月次の 2 段バーグラフ（`OffscreenCanvas` 描画） |
+
+### Diary ビュー
+
+![Diary ビュー](docs/screenshots/diary-view.png)
+
+### Dashboard ビュー
+
+![Dashboard ビュー](docs/screenshots/dashboard-view.png)
+
+### Charge ビュー
+
+![Charge ビュー](docs/screenshots/charge-view.png)
+
 ### シミュレータ起動手順
 
 ```bash
