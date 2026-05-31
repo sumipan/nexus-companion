@@ -27,6 +27,27 @@ let pollTimer: ReturnType<typeof setInterval> | null = null;
 let activeConfig: Config | null = null;
 let activeBridge: EvenAppBridge | null = null;
 
+// preload cache
+let cachedCharge: Result<ChargeData> | null = null;
+let inflightCharge: Promise<Result<ChargeData>> | null = null;
+
+async function fetchChargeWithCache(
+  config: Config,
+): Promise<Result<ChargeData>> {
+  if (inflightCharge) return inflightCharge;
+  inflightCharge = fetchCharge(config).then((r) => {
+    cachedCharge = r;
+    inflightCharge = null;
+    return r;
+  });
+  return inflightCharge;
+}
+
+/** bootstrap で fire-and-forget で呼ぶ。背景で fetch して cache。 */
+export function preloadCharge(config: Config): Promise<Result<ChargeData>> {
+  return fetchChargeWithCache(config);
+}
+
 export type ChargeMetric = {
   label: string;
   // 実使用率 (0-100)。バー描画の埋め率はこれ
@@ -110,26 +131,37 @@ async function applyContent(bridge: EvenAppBridge, content: string): Promise<voi
   );
 }
 
-async function pollOnce(): Promise<void> {
-  if (!activeConfig || !activeBridge) {
-    return;
-  }
-
-  const result = await fetchCharge(activeConfig);
+async function renderResult(
+  bridge: EvenAppBridge,
+  result: Result<ChargeData>,
+): Promise<void> {
   if (!result.ok) {
-    await applyContent(activeBridge, result.error || ERROR_MESSAGE);
+    await applyContent(bridge, result.error || ERROR_MESSAGE);
     return;
   }
-
   const metrics = extractMetrics(result.data);
-  await applyContent(activeBridge, buildChargeText(metrics));
+  await applyContent(bridge, buildChargeText(metrics));
+}
+
+async function pollOnce(): Promise<void> {
+  if (!activeConfig || !activeBridge) return;
+  const result = await fetchChargeWithCache(activeConfig);
+  await renderResult(activeBridge, result);
 }
 
 export function startCharge(config: Config, bridge: EvenAppBridge): void {
   stopCharge();
   activeConfig = config;
   activeBridge = bridge;
-  void pollOnce();
+  // cache hit があれば即描画、続けて背景で最新化
+  if (cachedCharge !== null) {
+    void renderResult(bridge, cachedCharge);
+    void fetchChargeWithCache(config).then((latest) => {
+      if (activeBridge === bridge) void renderResult(bridge, latest);
+    });
+  } else {
+    void pollOnce();
+  }
   pollTimer = setInterval(() => {
     void pollOnce();
   }, POLL_INTERVAL_MS);
