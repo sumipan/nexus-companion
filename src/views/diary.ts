@@ -46,12 +46,13 @@ export function initDiaryView(bridge: EvenAppBridge, config: Config): () => void
           // 空文字列だとガラスに何も描画されない可能性があるので初期 content を入れる
           content: "loading...",
           isEventCapture: 1,
-          // SDK README の公式 example は寸法を必ず明示している。未指定だと
-          // 描画領域がゼロになる可能性があるため glasses display サイズで明示。
+          // glasses display は 576x288 px。288x144 だと画面左上 1/4 しか
+          // 使えず日記本文ですぐスクロールが要る。フルスクリーンに広げて
+          // paginate(LINES_PER_PAGE=10) と協調させる。
           xPosition: 0,
           yPosition: 0,
-          width: 288,
-          height: 144,
+          width: 576,
+          height: 288,
         }),
       ],
     });
