@@ -91,6 +91,10 @@ async function main(): Promise<void> {
   registerChargeLifecycle(config, bridge);
   log("8: charge lifecycle registered");
 
+  // 右テンプルタップ間隔のデバウンス（同一タップで複数 event が飛ぶケースに備える）
+  let lastTriggerAt = 0;
+  const DEBOUNCE_MS = 400;
+
   bridge.onEvenHubEvent((event) => {
     // event の型 / source を enum 名でデコードして log する
     const sys = event.sysEvent;
@@ -105,17 +109,20 @@ async function main(): Promise<void> {
     const textEvt = event.textEvent ? ` text=${JSON.stringify(event.textEvent)}` : "";
     log(`event: type=${typeName} source=${sourceName}${textEvt}`);
 
-    // ダブルタップが OS に握られていて DOUBLE_CLICK_EVENT が届かない仮説に備え、
-    // 右テンプルの **シングルクリック** でも nextView() を呼ぶ fallback を入れる。
-    // ついでに source 不問で DOUBLE_CLICK も受ける（実機ログ上 source が欠ける挙動を考慮）。
-    if (sys?.eventType === OsEventTypeList.DOUBLE_CLICK_EVENT) {
-      log("→ nextView() trigger: DOUBLE_CLICK");
-      nextView();
-    } else if (
-      sys?.eventType === OsEventTypeList.CLICK_EVENT &&
-      sys?.eventSource === EventSourceType.TOUCH_EVENT_FROM_GLASSES_R
-    ) {
-      log("→ nextView() trigger: right-temple CLICK");
+    // 実機ログより、右テンプル シングルタップは
+    //   { sysEvent: { eventSource: 1 } }  (eventType 欠落)
+    // で届く。`type === CLICK_EVENT(0)` の比較は undefined===0=false で発火しないので
+    // **eventSource のみ**で判定する。
+    // テンプル ダブルタップは OS が握って「終了？」ダイアログを出すためアプリには
+    // 届かない仕様（実機検証で確認）。代替操作として右テンプル単タップに集約する。
+    if (sys?.eventSource === EventSourceType.TOUCH_EVENT_FROM_GLASSES_R) {
+      const now = Date.now();
+      if (now - lastTriggerAt < DEBOUNCE_MS) {
+        log("→ skip (debounced)");
+        return;
+      }
+      lastTriggerAt = now;
+      log("→ nextView() trigger: right-temple touch");
       nextView();
     }
   });
