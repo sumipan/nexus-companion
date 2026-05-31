@@ -120,21 +120,10 @@ export function initDiaryView(bridge: EvenAppBridge, config: Config): () => void
     // させていた可能性が高い (実機で 2 タップ目以降届かない症状)。
     //
     // await createContainer();
-    //
-    // ───────── DIAGNOSTIC (v0.1.13) ─────────
-    // v0.1.12 でも 2 タップ目以降 event 届かず。textContainerUpgrade が bridge
-    // event 流入を止めているのか切り分けるため、diary activate 時に何もしない
-    // (loadAndDisplay と poll setInterval を両方コメントアウト)。
-    //
-    // 期待: blank → tap → diary (ガラスは空のまま、何も描画しない)、もう一度
-    // tap → dashboard 切替が動けば「diary の textContainerUpgrade が真因」と
-    // 切り分けできる。
-    //
-    // await loadAndDisplay();
-    // pollTimer = setInterval(() => {
-    //   void loadAndDisplay();
-    // }, POLL_INTERVAL_MS);
-    // ───────── /DIAGNOSTIC ─────────
+    await loadAndDisplay();
+    pollTimer = setInterval(() => {
+      void loadAndDisplay();
+    }, POLL_INTERVAL_MS);
     // v0.1.10 で実機検証したところ、ここで bridge.onEvenHubEvent を別途登録すると
     // main.ts 側で登録した TOUCH event リスナーが上書きされて view 切替が止まる
     // 事象が確認された (SDK の onEvenHubEvent は後勝ち / 単一 listener 仕様の模様)。
@@ -161,7 +150,10 @@ export function initDiaryView(bridge: EvenAppBridge, config: Config): () => void
       unsubscribeEvents();
       unsubscribeEvents = undefined;
     }
-    await bridge.shutDownPageContainer();
+    // `bridge.shutDownPageContainer()` はアプリ自体を終了させる API である
+    // ことが実機検証で確認された (v0.1.7 で blank view から削除済み)。
+    // ここで呼ぶと「diary → 他 view」遷移のたびにアプリが閉じる。呼ばない。
+    // ガラスに残った日記内容は次の view の textContainerUpgrade で上書きされる。
   }
 
   const unsubscribeView = subscribe((view) => {
