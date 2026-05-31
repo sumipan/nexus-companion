@@ -29,12 +29,15 @@ let activeBridge: EvenAppBridge | null = null;
 
 export type ChargeMetric = {
   label: string;
-  percent: number;
+  // 実使用率 (0-100)。バー描画の埋め率はこれ
+  usedPercent: number;
+  // 期間進捗 (0-100)。分母として "12 / 14 %" のように表示する
+  periodPercent: number;
 };
 
 /**
  * reset_at と期間日数から「今が期間のどれだけ進んだか」を 0-100 で返す。
- * 例: 週次 reset_at = 日曜 04:00、periodDays = 7 → 期間内の経過時間 / 7 日 * 100
+ * 例: 週次 reset_at = 日曜 04:00、periodDays = 7 → 経過 / 7 日 * 100
  */
 function progressPercent(resetAtIso: string, periodDays: number): number {
   const reset = new Date(resetAtIso).getTime();
@@ -45,16 +48,36 @@ function progressPercent(resetAtIso: string, periodDays: number): number {
   return Math.max(0, Math.min(100, Math.round((elapsed / periodMs) * 100)));
 }
 
+const FIVE_HOURS_DAYS = 5 / 24;
+
 export function extractMetrics(data: ChargeData): ChargeMetric[] {
+  const weekProg = progressPercent(data.claude.weekly.reset_at, 7);
+  const monthProg = progressPercent(data.cursor.monthly.reset_at, 30);
+  const sessionProg = progressPercent(
+    data.claude.session_5h.reset_at,
+    FIVE_HOURS_DAYS,
+  );
   return [
-    // 時間進捗（次の reset まで何 % 経過したか）
-    { label: "Week prog", percent: progressPercent(data.claude.weekly.reset_at, 7) },
-    { label: "Mon  prog", percent: progressPercent(data.cursor.monthly.reset_at, 30) },
-    // 実使用量
-    { label: "Claude wk", percent: data.claude.weekly.used_percent },
-    { label: "Claude 5h", percent: data.claude.session_5h.used_percent },
-    { label: "Cursor Au", percent: data.cursor.monthly.auto_percent },
-    { label: "Cursor Ap", percent: data.cursor.monthly.api_percent },
+    {
+      label: "Claude wk",
+      usedPercent: data.claude.weekly.used_percent,
+      periodPercent: weekProg,
+    },
+    {
+      label: "Claude 5h",
+      usedPercent: data.claude.session_5h.used_percent,
+      periodPercent: sessionProg,
+    },
+    {
+      label: "Cursor Au",
+      usedPercent: data.cursor.monthly.auto_percent,
+      periodPercent: monthProg,
+    },
+    {
+      label: "Cursor Ap",
+      usedPercent: data.cursor.monthly.api_percent,
+      periodPercent: monthProg,
+    },
   ];
 }
 
@@ -68,11 +91,11 @@ function buildBar(percent: number): string {
 export function buildChargeText(metrics: ChargeMetric[]): string {
   const lines: string[] = ["LLM usage"];
   for (const m of metrics) {
-    const pct = Math.round(m.percent);
-    const pctStr = String(pct).padStart(3, " ");
-    // ラベルは半角 9 文字に揃える (Claude wk / Claude 5h / Cursor mo / Cursor Au / Cursor Ap / Overall)
+    const used = String(Math.round(m.usedPercent)).padStart(3, " ");
+    const period = String(Math.round(m.periodPercent)).padStart(3, " ");
     const label = m.label.padEnd(9, " ");
-    lines.push(`${label} ${buildBar(m.percent)} ${pctStr}%`);
+    // 使用率 / 期間進捗 % 形式 (例: " 12/ 14 %"). バーは実使用率を描画
+    lines.push(`${label} ${buildBar(m.usedPercent)} ${used}/${period} %`);
   }
   return lines.join("\n");
 }
