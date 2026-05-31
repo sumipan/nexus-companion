@@ -1,7 +1,11 @@
-import {
-  TextContainerUpgrade,
-  type EvenAppBridge,
-} from "@evenrealities/even_hub_sdk";
+/**
+ * LLM usage 表示用のデータ取得 + フォーマット
+ *
+ * 旧 v0.2.3 までは独立した "charge" view として 1 つの view を占めていたが、
+ * v0.3.0 で dashboard view に統合された (LLM usage を上、ghdag tasks 集計を下)。
+ * ここでは view lifecycle は持たず、preload (cache) と「ChargeMetric への変換」
+ * 「ASCII バーグラフ生成」のヘルパーのみを export する。
+ */
 
 import {
   fetchCharge as defaultFetchCharge,
@@ -9,29 +13,19 @@ import {
 } from "../api/charge.ts";
 import type { Result } from "../api/types.ts";
 import type { Config } from "../config.ts";
-import { subscribe, type ViewName } from "../state/view.ts";
 
-const POLL_INTERVAL_MS = 30_000;
-const ERROR_MESSAGE = "進捗データ取得失敗";
-// bootstrap (main.ts) で立てた container を共有
-const CONTAINER_ID = 1;
-const CONTAINER_NAME = "main";
-// glass 576 px に 6 行を収めるため、バー幅は短めに。
-// 1 行のフォーマット: "<label14> <bar18> <pct3>%" → 約 14 + 1 + 18 + 1 + 4 = 38 文字
+// 1 行のフォーマット: "<label9> <bar18> <used3>/<period3> %"
 const BAR_WIDTH = 18;
 
 type FetchCharge = (config: Config) => Promise<Result<ChargeData>>;
 
 let fetchCharge: FetchCharge = defaultFetchCharge;
-let pollTimer: ReturnType<typeof setInterval> | null = null;
-let activeConfig: Config | null = null;
-let activeBridge: EvenAppBridge | null = null;
 
 // preload cache
 let cachedCharge: Result<ChargeData> | null = null;
 let inflightCharge: Promise<Result<ChargeData>> | null = null;
 
-async function fetchChargeWithCache(
+export async function fetchChargeWithCache(
   config: Config,
 ): Promise<Result<ChargeData>> {
   if (inflightCharge) return inflightCharge;
@@ -48,6 +42,10 @@ export function preloadCharge(config: Config): Promise<Result<ChargeData>> {
   return fetchChargeWithCache(config);
 }
 
+export function getCachedCharge(): Result<ChargeData> | null {
+  return cachedCharge;
+}
+
 export type ChargeMetric = {
   label: string;
   // 実使用率 (0-100)。バー描画の埋め率はこれ
@@ -56,10 +54,6 @@ export type ChargeMetric = {
   periodPercent: number;
 };
 
-/**
- * reset_at と期間日数から「今が期間のどれだけ進んだか」を 0-100 で返す。
- * 例: 週次 reset_at = 日曜 04:00、periodDays = 7 → 経過 / 7 日 * 100
- */
 function progressPercent(resetAtIso: string, periodDays: number): number {
   const reset = new Date(resetAtIso).getTime();
   if (Number.isNaN(reset)) return 0;
@@ -115,93 +109,12 @@ export function buildChargeText(metrics: ChargeMetric[]): string {
     const used = String(Math.round(m.usedPercent)).padStart(3, " ");
     const period = String(Math.round(m.periodPercent)).padStart(3, " ");
     const label = m.label.padEnd(9, " ");
-    // 使用率 / 期間進捗 % 形式 (例: " 12/ 14 %"). バーは実使用率を描画
     lines.push(`${label} ${buildBar(m.usedPercent)} ${used}/${period} %`);
   }
   return lines.join("\n");
 }
 
-async function applyContent(bridge: EvenAppBridge, content: string): Promise<void> {
-  await bridge.textContainerUpgrade(
-    new TextContainerUpgrade({
-      containerID: CONTAINER_ID,
-      containerName: CONTAINER_NAME,
-      content,
-    }),
-  );
-}
-
-async function renderResult(
-  bridge: EvenAppBridge,
-  result: Result<ChargeData>,
-): Promise<void> {
-  if (!result.ok) {
-    await applyContent(bridge, result.error || ERROR_MESSAGE);
-    return;
-  }
-  const metrics = extractMetrics(result.data);
-  await applyContent(bridge, buildChargeText(metrics));
-}
-
-async function pollOnce(): Promise<void> {
-  if (!activeConfig || !activeBridge) return;
-  const result = await fetchChargeWithCache(activeConfig);
-  await renderResult(activeBridge, result);
-}
-
-export function startCharge(config: Config, bridge: EvenAppBridge): void {
-  stopCharge();
-  activeConfig = config;
-  activeBridge = bridge;
-  // cache hit があれば即描画、続けて背景で最新化
-  if (cachedCharge !== null) {
-    void renderResult(bridge, cachedCharge);
-    void fetchChargeWithCache(config).then((latest) => {
-      if (activeBridge === bridge) void renderResult(bridge, latest);
-    });
-  } else {
-    void pollOnce();
-  }
-  pollTimer = setInterval(() => {
-    void pollOnce();
-  }, POLL_INTERVAL_MS);
-}
-
-export function stopCharge(): void {
-  if (pollTimer !== null) {
-    clearInterval(pollTimer);
-    pollTimer = null;
-  }
-  activeConfig = null;
-  activeBridge = null;
-  // bridge.shutDownPageContainer はアプリ終了系の API なので呼ばない (v0.1.14 確認済み)。
-  // bootstrap で立てた container を blank / diary / dashboard と共有しているので、
-  // ここで何かを破棄する必要はない。
-}
-
-export function registerChargeLifecycle(
-  config: Config,
-  bridge: EvenAppBridge,
-): () => void {
-  const onViewChange = (view: ViewName): void => {
-    if (view === "charge") {
-      startCharge(config, bridge);
-    } else {
-      stopCharge();
-    }
-  };
-
-  return subscribe(onViewChange);
-}
-
-export function __resetChargeStateForTest(): void {
-  stopCharge();
-}
-
-export function __getPollTimerForTest(): ReturnType<typeof setInterval> | null {
-  return pollTimer;
-}
-
+// ─── test helpers ─────────────────────────────────────────────────────
 export function __setFetchChargeForTest(fetchFn: FetchCharge): void {
   fetchCharge = fetchFn;
 }
@@ -210,6 +123,7 @@ export function __resetFetchChargeForTest(): void {
   fetchCharge = defaultFetchCharge;
 }
 
-export async function __pollOnceForTest(): Promise<void> {
-  await pollOnce();
+export function __resetChargeCacheForTest(): void {
+  cachedCharge = null;
+  inflightCharge = null;
 }

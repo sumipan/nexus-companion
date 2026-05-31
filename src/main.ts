@@ -58,8 +58,8 @@ import {
 import { loadConfig } from "./config";
 import { dispatchTextEvent, nextView } from "./state/view";
 import { registerBlankLifecycle } from "./views/blank";
-import { preloadCharge, registerChargeLifecycle } from "./views/charge";
 import {
+  preloadCharge,
   preloadDashboard,
   registerDashboardLifecycle,
 } from "./views/dashboard";
@@ -129,10 +129,7 @@ async function main(): Promise<void> {
   log("6: diary view registered");
 
   registerDashboardLifecycle(config, bridge);
-  log("7: dashboard lifecycle registered");
-
-  registerChargeLifecycle(config, bridge);
-  log("8: charge lifecycle registered");
+  log("7: dashboard lifecycle registered (LLM usage + ghdag tasks)");
 
   // ───────── 各 view のデータを背景で fire-and-forget で先取り ─────────
   // タップで view が切り替わった時に fetch 完了を待たず即描画できるようにする。
