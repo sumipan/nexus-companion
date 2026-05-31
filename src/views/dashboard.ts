@@ -75,6 +75,10 @@ function buildPageContainer(content: string): RebuildPageContainer {
         yPosition: 0,
         width: 576,
         height: 288,
+        // rebuildPageContainer は container 構造を再構築するため、ここで
+        // isEventCapture を指定しないと 0 にリセットされ、その後のテンプル
+        // event が OS に拾われて view 切替ができなくなる。必ず維持する。
+        isEventCapture: 1,
       }),
     ],
   });
