@@ -16,8 +16,9 @@ const ERROR_MESSAGE = "進捗データ取得失敗";
 // bootstrap (main.ts) で立てた container を共有
 const CONTAINER_ID = 1;
 const CONTAINER_NAME = "main";
-// glass 576 px に収まる範囲で、見やすいバー幅
-const BAR_WIDTH = 24;
+// glass 576 px に 6 行を収めるため、バー幅は短めに。
+// 1 行のフォーマット: "<label14> <bar18> <pct3>%" → 約 14 + 1 + 18 + 1 + 4 = 38 文字
+const BAR_WIDTH = 18;
 
 type FetchCharge = (config: Config) => Promise<Result<ChargeData>>;
 
@@ -26,13 +27,35 @@ let pollTimer: ReturnType<typeof setInterval> | null = null;
 let activeConfig: Config | null = null;
 let activeBridge: EvenAppBridge | null = null;
 
-export function extractMetrics(
-  data: ChargeData,
-): { claudePercent: number; cursorPercent: number } {
-  return {
-    claudePercent: data.claude.weekly.used_percent,
-    cursorPercent: data.cursor.monthly.total_percent,
-  };
+export type ChargeMetric = {
+  label: string;
+  percent: number;
+};
+
+/**
+ * reset_at と期間日数から「今が期間のどれだけ進んだか」を 0-100 で返す。
+ * 例: 週次 reset_at = 日曜 04:00、periodDays = 7 → 期間内の経過時間 / 7 日 * 100
+ */
+function progressPercent(resetAtIso: string, periodDays: number): number {
+  const reset = new Date(resetAtIso).getTime();
+  if (Number.isNaN(reset)) return 0;
+  const periodMs = periodDays * 24 * 60 * 60 * 1000;
+  const start = reset - periodMs;
+  const elapsed = Date.now() - start;
+  return Math.max(0, Math.min(100, Math.round((elapsed / periodMs) * 100)));
+}
+
+export function extractMetrics(data: ChargeData): ChargeMetric[] {
+  return [
+    // 時間進捗（次の reset まで何 % 経過したか）
+    { label: "Week prog", percent: progressPercent(data.claude.weekly.reset_at, 7) },
+    { label: "Mon  prog", percent: progressPercent(data.cursor.monthly.reset_at, 30) },
+    // 実使用量
+    { label: "Claude wk", percent: data.claude.weekly.used_percent },
+    { label: "Claude 5h", percent: data.claude.session_5h.used_percent },
+    { label: "Cursor Au", percent: data.cursor.monthly.auto_percent },
+    { label: "Cursor Ap", percent: data.cursor.monthly.api_percent },
+  ];
 }
 
 function buildBar(percent: number): string {
@@ -42,19 +65,15 @@ function buildBar(percent: number): string {
   return "█".repeat(filled) + "░".repeat(empty);
 }
 
-export function buildChargeText(
-  claudePercent: number,
-  cursorPercent: number,
-): string {
-  const lines: string[] = [];
-  lines.push("LLM usage");
-  lines.push("");
-  lines.push(
-    `Claude  ${buildBar(claudePercent)}  ${String(claudePercent).padStart(3, " ")}% (weekly)`,
-  );
-  lines.push(
-    `Cursor  ${buildBar(cursorPercent)}  ${String(cursorPercent).padStart(3, " ")}% (monthly)`,
-  );
+export function buildChargeText(metrics: ChargeMetric[]): string {
+  const lines: string[] = ["LLM usage"];
+  for (const m of metrics) {
+    const pct = Math.round(m.percent);
+    const pctStr = String(pct).padStart(3, " ");
+    // ラベルは半角 9 文字に揃える (Claude wk / Claude 5h / Cursor mo / Cursor Au / Cursor Ap / Overall)
+    const label = m.label.padEnd(9, " ");
+    lines.push(`${label} ${buildBar(m.percent)} ${pctStr}%`);
+  }
   return lines.join("\n");
 }
 
@@ -79,8 +98,8 @@ async function pollOnce(): Promise<void> {
     return;
   }
 
-  const { claudePercent, cursorPercent } = extractMetrics(result.data);
-  await applyContent(activeBridge, buildChargeText(claudePercent, cursorPercent));
+  const metrics = extractMetrics(result.data);
+  await applyContent(activeBridge, buildChargeText(metrics));
 }
 
 export function startCharge(config: Config, bridge: EvenAppBridge): void {
