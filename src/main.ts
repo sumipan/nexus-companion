@@ -58,9 +58,12 @@ import {
 import { loadConfig } from "./config";
 import { dispatchTextEvent, nextView } from "./state/view";
 import { registerBlankLifecycle } from "./views/blank";
-import { registerChargeLifecycle } from "./views/charge";
-import { registerDashboardLifecycle } from "./views/dashboard";
-import { initDiaryView } from "./views/diary";
+import { preloadCharge, registerChargeLifecycle } from "./views/charge";
+import {
+  preloadDashboard,
+  registerDashboardLifecycle,
+} from "./views/dashboard";
+import { initDiaryView, preloadDiary } from "./views/diary";
 
 log("2: imports resolved");
 
@@ -130,6 +133,16 @@ async function main(): Promise<void> {
 
   registerChargeLifecycle(config, bridge);
   log("8: charge lifecycle registered");
+
+  // ───────── 各 view のデータを背景で fire-and-forget で先取り ─────────
+  // タップで view が切り替わった時に fetch 完了を待たず即描画できるようにする。
+  // 失敗結果も cache に入るので 1 回目の表示も即出る (古いエラー文字列だが)。
+  // bridge.onEvenHubEvent の登録より前に kick して、register 中にも fetch が
+  // 進むようにする。
+  void preloadDiary(config);
+  void preloadDashboard(config);
+  void preloadCharge(config);
+  log("8a: preload kicked (diary / dashboard / charge)");
 
   // 右テンプルタップ間隔のデバウンス（同一タップで複数 event が飛ぶケースに備える）
   let lastTriggerAt = 0;

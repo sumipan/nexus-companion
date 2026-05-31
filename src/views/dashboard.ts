@@ -22,6 +22,26 @@ let previousCounts: Map<string, number> | null = null;
 let activeConfig: Config | null = null;
 let activeBridge: EvenAppBridge | null = null;
 
+// preload cache: bootstrap で fire-and-forget で fetch しておき、activate 時の
+// 描画 latency を消す
+let cachedRows: Result<GhdagRow[]> | null = null;
+let inflightRows: Promise<Result<GhdagRow[]>> | null = null;
+
+async function fetchRowsWithCache(config: Config): Promise<Result<GhdagRow[]>> {
+  if (inflightRows) return inflightRows;
+  inflightRows = fetchGhdagRows(config).then((r) => {
+    cachedRows = r;
+    inflightRows = null;
+    return r;
+  });
+  return inflightRows;
+}
+
+/** bootstrap で fire-and-forget で呼ぶ。背景で fetch して cache。 */
+export function preloadDashboard(config: Config): Promise<Result<GhdagRow[]>> {
+  return fetchRowsWithCache(config);
+}
+
 export function aggregateByState(rows: GhdagRow[]): Map<string, number> {
   const counts = new Map<string, number>();
   for (const row of rows) {
@@ -84,24 +104,26 @@ async function applyContent(bridge: EvenAppBridge, content: string): Promise<voi
   );
 }
 
-async function pollOnce(): Promise<void> {
-  if (!activeConfig || !activeBridge) {
-    return;
-  }
-
-  const result = await fetchGhdagRows(activeConfig);
+async function renderResult(
+  bridge: EvenAppBridge,
+  result: Result<GhdagRow[]>,
+): Promise<void> {
   if (!result.ok) {
-    await applyContent(activeBridge, result.error);
+    await applyContent(bridge, result.error);
     return;
   }
-
   const counts = aggregateByState(result.data);
   if (previousCounts !== null && countsEqual(previousCounts, counts)) {
     return;
   }
-
   previousCounts = new Map(counts);
-  await applyContent(activeBridge, buildSummaryText(counts));
+  await applyContent(bridge, buildSummaryText(counts));
+}
+
+async function pollOnce(): Promise<void> {
+  if (!activeConfig || !activeBridge) return;
+  const result = await fetchRowsWithCache(activeConfig);
+  await renderResult(activeBridge, result);
 }
 
 export function startDashboard(config: Config, bridge: EvenAppBridge): void {
@@ -109,7 +131,15 @@ export function startDashboard(config: Config, bridge: EvenAppBridge): void {
   activeConfig = config;
   activeBridge = bridge;
   previousCounts = null;
-  void pollOnce();
+  // cache hit があれば即描画（fetch 待たない、UX 改善）。続けて背景で最新化。
+  if (cachedRows !== null) {
+    void renderResult(bridge, cachedRows);
+    void fetchRowsWithCache(config).then((latest) => {
+      if (activeBridge === bridge) void renderResult(bridge, latest);
+    });
+  } else {
+    void pollOnce();
+  }
   pollTimer = setInterval(() => {
     void pollOnce();
   }, POLL_INTERVAL_MS);

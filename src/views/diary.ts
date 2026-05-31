@@ -8,6 +8,7 @@ import {
 } from "@evenrealities/even_hub_sdk";
 
 import { fetchDiary } from "../api/diary.ts";
+import type { Result } from "../api/types.ts";
 import type { Config } from "../config.ts";
 import {
   getView,
@@ -16,6 +17,29 @@ import {
 } from "../state/view.ts";
 
 export const LINES_PER_PAGE = 10;
+
+// module-level cache: bootstrap で fire-and-forget で fetch しておき、activate
+// 時に cache hit で即描画する。失敗結果も cache に入れて 1 回目の表示を即出す。
+let cachedDiary: Result<string> | null = null;
+let inflightDiary: Promise<Result<string>> | null = null;
+
+async function fetchDiaryWithCache(config: Config): Promise<Result<string>> {
+  if (inflightDiary) return inflightDiary;
+  inflightDiary = fetchDiary(config).then((r) => {
+    cachedDiary = r;
+    inflightDiary = null;
+    return r;
+  });
+  return inflightDiary;
+}
+
+/**
+ * bootstrap 時に fire-and-forget で呼ぶ。背景で fetch して cache に入れておく。
+ * 既に in-flight ならそれを返す。
+ */
+export function preloadDiary(config: Config): Promise<Result<string>> {
+  return fetchDiaryWithCache(config);
+}
 
 const DIARY_CONTAINER_ID = 1;
 const DIARY_CONTAINER_NAME = "diary";
@@ -77,8 +101,7 @@ export function initDiaryView(bridge: EvenAppBridge, config: Config): () => void
     );
   }
 
-  async function loadAndDisplay(): Promise<void> {
-    const result = await fetchDiary(config);
+  function applyResultToPages(result: Result<string>): void {
     if (result.ok) {
       pages = paginate(result.data);
     } else {
@@ -87,6 +110,11 @@ export function initDiaryView(bridge: EvenAppBridge, config: Config): () => void
     if (pageIndex >= pages.length) {
       pageIndex = Math.max(0, pages.length - 1);
     }
+  }
+
+  async function loadAndDisplay(): Promise<void> {
+    const result = await fetchDiaryWithCache(config);
+    applyResultToPages(result);
     await displayPage();
   }
 
@@ -124,7 +152,21 @@ export function initDiaryView(bridge: EvenAppBridge, config: Config): () => void
     // させていた可能性が高い (実機で 2 タップ目以降届かない症状)。
     //
     // await createContainer();
-    await loadAndDisplay();
+    //
+    // cache hit があれば即座に描画 (fetch 待たない、UX 改善)、その後背景で
+    // 最新化。cache 無しなら従来通り fetch 完了まで待つ。
+    if (cachedDiary !== null) {
+      applyResultToPages(cachedDiary);
+      await displayPage();
+      // 背景で最新化 (古い結果を上書き)
+      void fetchDiaryWithCache(config).then((latest) => {
+        if (!diaryActive) return;
+        applyResultToPages(latest);
+        void displayPage();
+      });
+    } else {
+      await loadAndDisplay();
+    }
     pollTimer = setInterval(() => {
       void loadAndDisplay();
     }, POLL_INTERVAL_MS);
