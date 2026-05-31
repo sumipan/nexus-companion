@@ -11,14 +11,21 @@ import type { Result } from "../api/types.ts";
 import type { Config } from "../config.ts";
 import { subscribe, type ViewName } from "../state/view.ts";
 
+import type { ChargeData } from "../api/charge.ts";
+import {
+  buildChargeText,
+  extractMetrics,
+  fetchChargeWithCache,
+  getCachedCharge,
+  preloadCharge as preloadChargeImpl,
+} from "./charge.ts";
+
 const POLL_INTERVAL_MS = 10_000;
 type FetchGhdagRows = (config: Config) => Promise<Result<GhdagRow[]>>;
 
 let fetchGhdagRows: FetchGhdagRows = defaultFetchGhdagRows;
-const LABEL_WIDTH = 18;
 
 let pollTimer: ReturnType<typeof setInterval> | null = null;
-let previousCounts: Map<string, number> | null = null;
 let activeConfig: Config | null = null;
 let activeBridge: EvenAppBridge | null = null;
 
@@ -42,58 +49,85 @@ export function preloadDashboard(config: Config): Promise<Result<GhdagRow[]>> {
   return fetchRowsWithCache(config);
 }
 
-export function aggregateByState(rows: GhdagRow[]): Map<string, number> {
-  const counts = new Map<string, number>();
-  for (const row of rows) {
-    counts.set(row.state, (counts.get(row.state) ?? 0) + 1);
+// ─── ghdag rows → カテゴリ別カウント ───────────────────────────────────
+// ghdag の state 文字列はソース (/var/tmp/ghdag/src/ghdag/pipeline/status.py) より:
+//   STATE_PENDING_DEPS = "待機（依存未充足）"
+//   STATE_PENDING_RUN  = "待機（実行可能）"
+//   STATE_RUNNING      = "実行中"
+//   STATE_OK           = "完了（成功）"
+//   STATE_FAIL         = "完了（失敗）"
+//   STATE_REJECTED     = "完了（REJECTED）"
+//   STATE_EMPTY        = "完了（EMPTY_RESULT）"
+//   STATE_UNKNOWN_DONE = "完了（その他）"
+// これを 4 カテゴリ「実行中 / 待機中 / 完了 / 失敗」に集約する。
+const STATE_BUCKET: ReadonlyArray<{
+  label: "実行中" | "待機中" | "完了" | "失敗";
+  match: (state: string) => boolean;
+}> = [
+  { label: "実行中", match: (s) => s === "実行中" },
+  { label: "待機中", match: (s) => s.startsWith("待機") },
+  {
+    label: "完了",
+    match: (s) => s === "完了（成功）" || s === "完了（その他）",
+  },
+  {
+    label: "失敗",
+    match: (s) =>
+      s === "完了（失敗）" || s === "完了（REJECTED）" || s === "完了（EMPTY_RESULT）",
+  },
+];
+
+export type BucketCounts = {
+  実行中: number;
+  待機中: number;
+  完了: number;
+  失敗: number;
+};
+
+export function bucketizeRows(rows: GhdagRow[]): BucketCounts {
+  const c: BucketCounts = { 実行中: 0, 待機中: 0, 完了: 0, 失敗: 0 };
+  for (const r of rows) {
+    const state = r.state ?? "";
+    const bucket = STATE_BUCKET.find((b) => b.match(state));
+    if (bucket) c[bucket.label] += 1;
   }
-  return counts;
+  return c;
 }
 
-export function buildSummaryText(counts: Map<string, number>): string {
-  const lines: string[] = ["ghdag tasks"];
-  let total = 0;
+export function buildGhdagSummaryLine(counts: BucketCounts): string {
+  return `実行中 ${counts.実行中} / 待機中 ${counts.待機中} / 完了 ${counts.完了} / 失敗 ${counts.失敗}`;
+}
 
-  for (const [state, count] of counts) {
-    total += count;
-    const label = `${state}:`;
-    const padding = " ".repeat(Math.max(1, LABEL_WIDTH - label.length));
-    lines.push(`${label}${padding}${count}`);
+// ─── 統合表示 (LLM usage + ghdag tasks サマリ) ─────────────────────────
+function buildCombinedText(
+  charge: Result<ChargeData> | null,
+  rows: Result<GhdagRow[]> | null,
+): string {
+  const lines: string[] = [];
+
+  // LLM usage 部
+  if (charge && charge.ok) {
+    lines.push(buildChargeText(extractMetrics(charge.data)));
+  } else if (charge && !charge.ok) {
+    lines.push("LLM usage");
+    lines.push(charge.error || "進捗データ取得失敗");
+  } else {
+    lines.push("LLM usage");
+    lines.push("loading...");
   }
 
-  lines.push("─────────────────");
-  const totalLabel = "total:";
-  lines.push(`${totalLabel}${" ".repeat(LABEL_WIDTH - totalLabel.length)}${total}`);
+  // ghdag サマリ 1 行
+  if (rows && rows.ok) {
+    lines.push(buildGhdagSummaryLine(bucketizeRows(rows.data)));
+  } else if (rows && !rows.ok) {
+    lines.push(rows.error);
+  } else {
+    lines.push("ghdag loading...");
+  }
+
   return lines.join("\n");
 }
 
-export function countsEqual(
-  a: Map<string, number>,
-  b: Map<string, number>,
-): boolean {
-  if (a.size !== b.size) {
-    return false;
-  }
-  for (const [key, value] of a) {
-    if (b.get(key) !== value) {
-      return false;
-    }
-  }
-  return true;
-}
-
-/**
- * bootstrap で作った containerID=1 の TextContainer に content だけ流す。
- *
- * 以前は rebuildPageContainer を使っていたが、v0.1.9 でも `isEventCapture: 1`
- * を明示しても dashboard 遷移後にタップが届かなくなる事象が継続 (rebuildPage
- * Container は container 構造を再構築する API なので、isEventCapture の指定が
- * あっても何かしらの形で event capture を破壊している模様)。
- *
- * textContainerUpgrade は content だけ更新する API で container 構造を触らない
- * ので、bootstrap で立てた isEventCapture=1 がそのまま維持される。diary view と
- * 同じパターン。
- */
 async function applyContent(bridge: EvenAppBridge, content: string): Promise<void> {
   await bridge.textContainerUpgrade(
     new TextContainerUpgrade({
@@ -104,42 +138,30 @@ async function applyContent(bridge: EvenAppBridge, content: string): Promise<voi
   );
 }
 
-async function renderResult(
-  bridge: EvenAppBridge,
-  result: Result<GhdagRow[]>,
-): Promise<void> {
-  if (!result.ok) {
-    await applyContent(bridge, result.error);
-    return;
-  }
-  const counts = aggregateByState(result.data);
-  if (previousCounts !== null && countsEqual(previousCounts, counts)) {
-    return;
-  }
-  previousCounts = new Map(counts);
-  await applyContent(bridge, buildSummaryText(counts));
+async function renderCurrent(bridge: EvenAppBridge): Promise<void> {
+  const text = buildCombinedText(getCachedCharge(), cachedRows);
+  await applyContent(bridge, text);
 }
 
 async function pollOnce(): Promise<void> {
   if (!activeConfig || !activeBridge) return;
-  const result = await fetchRowsWithCache(activeConfig);
-  await renderResult(activeBridge, result);
+  // 両方を並列に fetch (cache 経由でリクエスト重複排除)
+  await Promise.all([
+    fetchChargeWithCache(activeConfig),
+    fetchRowsWithCache(activeConfig),
+  ]);
+  if (!activeBridge) return;
+  await renderCurrent(activeBridge);
 }
 
 export function startDashboard(config: Config, bridge: EvenAppBridge): void {
   stopDashboard();
   activeConfig = config;
   activeBridge = bridge;
-  previousCounts = null;
-  // cache hit があれば即描画（fetch 待たない、UX 改善）。続けて背景で最新化。
-  if (cachedRows !== null) {
-    void renderResult(bridge, cachedRows);
-    void fetchRowsWithCache(config).then((latest) => {
-      if (activeBridge === bridge) void renderResult(bridge, latest);
-    });
-  } else {
-    void pollOnce();
-  }
+  // cache hit があれば即描画 (両 cache あれば即完全表示、片方だけなら部分表示)。
+  // 続けて背景で両方の最新化を試みる。
+  void renderCurrent(bridge);
+  void pollOnce();
   pollTimer = setInterval(() => {
     void pollOnce();
   }, POLL_INTERVAL_MS);
@@ -169,9 +191,13 @@ export function registerDashboardLifecycle(
   return subscribe(onViewChange);
 }
 
+// charge 側の preload も dashboard 配下から再 export しておく
+// (main.ts の bootstrap で 1 行 import で済むよう)。
+export const preloadCharge = preloadChargeImpl;
+
+// ─── test helpers ─────────────────────────────────────────────────────
 export function __resetDashboardStateForTest(): void {
   stopDashboard();
-  previousCounts = null;
 }
 
 export function __getPollTimerForTest(): ReturnType<typeof setInterval> | null {
