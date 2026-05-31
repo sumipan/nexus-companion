@@ -43,12 +43,23 @@ export function initDiaryView(bridge: EvenAppBridge, config: Config): () => void
         new TextContainerProperty({
           containerID: DIARY_CONTAINER_ID,
           containerName: DIARY_CONTAINER_NAME,
-          content: "",
+          // 空文字列だとガラスに何も描画されない可能性があるので初期 content を入れる
+          content: "loading...",
           isEventCapture: 1,
+          // SDK README の公式 example は寸法を必ず明示している。未指定だと
+          // 描画領域がゼロになる可能性があるため glasses display サイズで明示。
+          xPosition: 0,
+          yPosition: 0,
+          width: 288,
+          height: 144,
         }),
       ],
     });
-    await bridge.createStartUpPageContainer(container);
+    const result = await bridge.createStartUpPageContainer(container);
+    // 描画されない原因切り分けのため戻り値を console に流す（diagnostic build の
+    // main.ts が WebView に表示する分岐とは別経路、simulator の /api/console でも見える）
+    // eslint-disable-next-line no-console
+    console.log(`[diary] createStartUpPageContainer returned: ${JSON.stringify(result)}`);
   }
 
   async function displayPage(): Promise<void> {
