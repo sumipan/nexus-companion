@@ -1,3 +1,5 @@
+import type { Text_ItemEvent } from "@evenrealities/even_hub_sdk";
+
 export type ViewName = "blank" | "diary" | "dashboard" | "charge";
 // blank を起動時 default にし、テンプル単タップで diary → dashboard → blank と循環。
 // 普段は何も表示せず、見たい時だけタップで切り替える運用。
@@ -26,4 +28,37 @@ export function subscribe(fn: Listener): () => void {
 export function nextView(): void {
   current = ORDER[(ORDER.indexOf(current) + 1) % ORDER.length];
   listeners.forEach((fn) => fn(current));
+}
+
+// ─────────────────────────────────────────────────────────────
+// textEvent dispatcher
+// ─────────────────────────────────────────────────────────────
+// SDK の `bridge.onEvenHubEvent` を複数回呼ぶと後から登録した listener が前の
+// listener を上書きする/競合する事象を避けるため、event listener は main.ts に
+// 1 本だけ持ち、textEvent (ページスクロール等) は各 view が register する
+// handler に dispatch する設計に統一する。
+//
+// register された handler のうち current view に対応するものだけが呼ばれる。
+
+export type TextEventHandler = (event: Text_ItemEvent) => void;
+
+const textEventHandlers: Map<ViewName, TextEventHandler> = new Map();
+
+export function registerTextEventHandler(
+  view: ViewName,
+  handler: TextEventHandler,
+): () => void {
+  textEventHandlers.set(view, handler);
+  return () => {
+    if (textEventHandlers.get(view) === handler) {
+      textEventHandlers.delete(view);
+    }
+  };
+}
+
+export function dispatchTextEvent(event: Text_ItemEvent): void {
+  const handler = textEventHandlers.get(current);
+  if (handler) {
+    handler(event);
+  }
 }

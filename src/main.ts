@@ -56,7 +56,7 @@ import {
 } from "@evenrealities/even_hub_sdk";
 
 import { loadConfig } from "./config";
-import { nextView } from "./state/view";
+import { dispatchTextEvent, nextView } from "./state/view";
 import { registerBlankLifecycle } from "./views/blank";
 import { registerChargeLifecycle } from "./views/charge";
 import { registerDashboardLifecycle } from "./views/dashboard";
@@ -164,6 +164,13 @@ async function main(): Promise<void> {
       lastTriggerAt = now;
       log("→ nextView() trigger: right-temple touch");
       nextView();
+    }
+
+    // textEvent (SCROLL_TOP_EVENT / SCROLL_BOTTOM_EVENT etc.) は current view の
+    // handler に dispatch する。bridge.onEvenHubEvent を view 内で別途登録すると
+    // 競合するため、view 側は state.registerTextEventHandler() を使う。
+    if (event.textEvent) {
+      dispatchTextEvent(event.textEvent);
     }
   });
   log("9: event listener registered — bootstrap complete");
