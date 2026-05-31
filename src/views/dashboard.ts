@@ -70,10 +70,11 @@ function buildPageContainer(content: string): RebuildPageContainer {
       new TextContainerProperty({
         containerID: 1,
         content,
+        // glasses display 576x288 px をフルに使う（diary view と統一）
         xPosition: 0,
         yPosition: 0,
-        width: 288,
-        height: 144,
+        width: 576,
+        height: 288,
       }),
     ],
   });
