@@ -5,12 +5,14 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:ehpk": "npm run build && evenhub pack app.json dist -o nexus-companion.ehpk",
     "preview": "vite preview"
   },
   "dependencies": {
     "@evenrealities/even_hub_sdk": "^0.0.10"
   },
   "devDependencies": {
+    "@evenrealities/evenhub-cli": "^0.1.13",
     "typescript": "^5.7.3",
     "vite": "^6.0.0"
   },
