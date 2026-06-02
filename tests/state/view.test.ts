@@ -98,4 +98,17 @@ describe("autoSwitchTo", () => {
     assert.deepEqual(seen, ["blank"]);
     unsub();
   });
+
+  it("is suppressed by 5s cooldown between consecutive auto-switches", () => {
+    mock.timers.enable({ apis: ["Date"] });
+    nextView(); // blank → tasks, sets lastManualSwitchAt = 0
+    mock.timers.tick(90_001); // expire grace period
+    autoSwitchTo("blank"); // first auto-switch succeeds
+    assert.equal(getView(), "blank");
+    autoSwitchTo("tasks"); // within 5s cooldown → suppressed
+    assert.equal(getView(), "blank");
+    mock.timers.tick(5_001);
+    autoSwitchTo("tasks"); // after cooldown → succeeds
+    assert.equal(getView(), "tasks");
+  });
 });
