@@ -1,16 +1,19 @@
 import type { Text_ItemEvent } from "@evenrealities/even_hub_sdk";
 
-export type ViewName = "blank" | "diary" | "dashboard";
-// blank を起動時 default にし、テンプル単タップで diary → dashboard → blank と
-// 循環。普段は何も表示せず、見たい時だけタップで切り替える運用。
-//
-// v0.3.0 で旧 charge view を dashboard に統合 (LLM usage 上 + ghdag tasks
-// 集約 1 行) し 3 段 rotation に整理。
-const ORDER: ViewName[] = ["blank", "diary", "dashboard"];
+export type ViewName = "blank" | "tasks" | "dashboard";
+
+const ORDER: ViewName[] = ["blank", "tasks", "dashboard"];
 
 type Listener = (v: ViewName) => void;
 let current: ViewName = "blank";
 const listeners: Set<Listener> = new Set();
+
+// Grace: after manual switch (nextView), suppress autoSwitchTo for 90s.
+// Cooldown: between auto-switches, enforce 5s minimum gap.
+const GRACE_MS = 90_000;
+const COOLDOWN_MS = 5_000;
+let lastManualSwitchAt = 0;
+let lastAutoSwitchAt = 0;
 
 export function getView(): ViewName {
   return current;
@@ -24,8 +27,25 @@ export function subscribe(fn: Listener): () => void {
 }
 
 export function nextView(): void {
+  lastManualSwitchAt = Date.now();
   current = ORDER[(ORDER.indexOf(current) + 1) % ORDER.length];
   listeners.forEach((fn) => fn(current));
+}
+
+export function autoSwitchTo(view: ViewName): void {
+  const now = Date.now();
+  if (now - lastManualSwitchAt < GRACE_MS) return;
+  if (now - lastAutoSwitchAt < COOLDOWN_MS) return;
+  if (current === view) return;
+  lastAutoSwitchAt = now;
+  current = view;
+  listeners.forEach((fn) => fn(current));
+}
+
+// テスト用: タイマー状態をリセット（タイムスタンプを過去に戻す）
+export function __resetAutoSwitchTimersForTest(): void {
+  lastManualSwitchAt = 0;
+  lastAutoSwitchAt = 0;
 }
 
 // ─────────────────────────────────────────────────────────────
