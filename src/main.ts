@@ -56,6 +56,7 @@ import {
 } from "@evenrealities/even_hub_sdk";
 
 import { loadConfig } from "./config";
+import { startDataWatcher } from "./state/dataWatcher";
 import { dispatchTextEvent, nextView } from "./state/view";
 import { preloadMessage, registerBlankLifecycle } from "./views/blank";
 import {
@@ -63,7 +64,7 @@ import {
   preloadDashboard,
   registerDashboardLifecycle,
 } from "./views/dashboard";
-import { initDiaryView, preloadDiary } from "./views/diary";
+import { initTasksView, preloadTasks } from "./views/tasks";
 
 log("2: imports resolved");
 
@@ -95,11 +96,8 @@ async function main(): Promise<void> {
   // 届かなくなる事象が実機で確認されたため、bootstrap で空 content の container
   // を 1 個だけ作って event capture を成立させる。
   //
-  // 後続の各 view (diary / dashboard / charge) は同じ containerID=1 に対して
+  // 後続の各 view (tasks / dashboard) は同じ containerID=1 に対して
   // textContainerUpgrade / rebuildPageContainer で content を上書きする。
-  // 既存 diary.ts も createStartUpPageContainer を呼ぶが、SDK 仕様で
-  // 2 回目以降の create は戻り値 1（失敗）を返すだけで害は無く、続く
-  // textContainerUpgrade は同じ container 上で動く。
   try {
     const initContainer = new CreateStartUpPageContainer({
       containerTotalNum: 1,
@@ -125,8 +123,8 @@ async function main(): Promise<void> {
   registerBlankLifecycle(bridge, config);
   log("5b: blank lifecycle registered (default view, shows secretary message)");
 
-  initDiaryView(bridge, config);
-  log("6: diary view registered");
+  initTasksView(bridge, config);
+  log("6: tasks view registered");
 
   registerDashboardLifecycle(config, bridge);
   log("7: dashboard lifecycle registered (LLM usage + ghdag tasks)");
@@ -137,10 +135,14 @@ async function main(): Promise<void> {
   // bridge.onEvenHubEvent の登録より前に kick して、register 中にも fetch が
   // 進むようにする。
   void preloadMessage(config);
-  void preloadDiary(config);
+  void preloadTasks(config);
   void preloadDashboard(config);
   void preloadCharge(config);
-  log("8a: preload kicked (message / diary / dashboard / charge)");
+  log("8a: preload kicked (message / tasks / dashboard / charge)");
+
+  // 指紋ベースの background watcher 起動 — message.txt 更新検知 → blank 自動切替
+  startDataWatcher(config);
+  log("8b: dataWatcher started");
 
   // 右テンプルタップ間隔のデバウンス（同一タップで複数 event が飛ぶケースに備える）
   let lastTriggerAt = 0;

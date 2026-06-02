@@ -7,6 +7,7 @@ import { fetchMessage } from "../api/message.ts";
 import type { Result } from "../api/types.ts";
 import type { Config } from "../config.ts";
 import { getView, subscribe, type ViewName } from "../state/view.ts";
+import { truncateToMaxWidth } from "../util/textWidth.ts";
 
 /**
  * blank View
@@ -52,7 +53,8 @@ export function preloadMessage(config: Config): Promise<Result<string>> {
 function resultToContent(result: Result<string>): string {
   if (result.ok) {
     const trimmed = result.data.replace(/\s+$/g, "");
-    return trimmed.length === 0 ? CLEAR_CONTENT : trimmed;
+    if (trimmed.length === 0) return CLEAR_CONTENT;
+    return truncateToMaxWidth(trimmed);
   }
   // "メッセージ未配置" は運用上頻繁にあるので glass を空にする (主張弱め)。
   // fetch エラー (サーバに接続できません等) はそのまま表示する。

@@ -1,27 +1,46 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { afterEach, describe, it, mock } from "node:test";
 
-import { getView, nextView, subscribe } from "../../src/state/view.ts";
+import {
+  __resetAutoSwitchTimersForTest,
+  autoSwitchTo,
+  getView,
+  nextView,
+  subscribe,
+} from "../../src/state/view.ts";
+
+function resetState(): void {
+  while (getView() !== "blank") {
+    nextView();
+  }
+  __resetAutoSwitchTimersForTest();
+}
 
 describe("view state", () => {
-  it("starts at diary", () => {
-    assert.equal(getView(), "diary");
+  afterEach(() => {
+    resetState();
+    mock.timers.reset();
   });
 
-  it("cycles diary → dashboard → charge → diary on three nextView calls", () => {
+  it("starts at blank", () => {
+    assert.equal(getView(), "blank");
+  });
+
+  it("cycles blank → tasks → dashboard → blank on three nextView calls", () => {
+    nextView();
+    assert.equal(getView(), "tasks");
     nextView();
     assert.equal(getView(), "dashboard");
     nextView();
-    assert.equal(getView(), "charge");
-    nextView();
-    assert.equal(getView(), "diary");
+    assert.equal(getView(), "blank");
   });
 
   it("notifies subscribe listeners on nextView", () => {
     const seen: string[] = [];
-    subscribe((v) => seen.push(v));
+    const unsub = subscribe((v) => seen.push(v));
     nextView();
-    assert.deepEqual(seen, ["dashboard"]);
+    assert.deepEqual(seen, ["tasks"]);
+    unsub();
   });
 
   it("unsubscribe stops notifications", () => {
@@ -30,5 +49,66 @@ describe("view state", () => {
     unsub();
     nextView();
     assert.deepEqual(seen, []);
+  });
+});
+
+describe("autoSwitchTo", () => {
+  afterEach(() => {
+    resetState();
+    mock.timers.reset();
+  });
+
+  it("switches view when no grace/cooldown active", () => {
+    nextView(); // blank → tasks
+    __resetAutoSwitchTimersForTest(); // clear grace set by nextView
+    autoSwitchTo("blank");
+    assert.equal(getView(), "blank");
+  });
+
+  it("is suppressed within 90s grace period after manual switch", () => {
+    mock.timers.enable({ apis: ["Date"] });
+    nextView(); // manual: blank → tasks, sets lastManualSwitchAt = now
+    autoSwitchTo("blank"); // within grace → suppressed
+    assert.equal(getView(), "tasks");
+  });
+
+  it("fires after grace period expires", () => {
+    mock.timers.enable({ apis: ["Date"] });
+    nextView(); // manual switch at T=0
+    mock.timers.tick(90_001);
+    autoSwitchTo("blank");
+    assert.equal(getView(), "blank");
+  });
+
+  it("does not switch when already on target view", () => {
+    __resetAutoSwitchTimersForTest();
+    const seen: string[] = [];
+    const unsub = subscribe((v) => seen.push(v));
+    autoSwitchTo("blank"); // already blank
+    assert.deepEqual(seen, []);
+    unsub();
+  });
+
+  it("notifies subscribers on successful auto-switch", () => {
+    nextView(); // blank → tasks
+    __resetAutoSwitchTimersForTest(); // clear grace timer set by nextView
+    const seen: string[] = [];
+    const unsub = subscribe((v) => seen.push(v));
+    autoSwitchTo("blank");
+    assert.deepEqual(seen, ["blank"]);
+    unsub();
+  });
+
+  it("is suppressed by 5s cooldown between consecutive auto-switches", () => {
+    mock.timers.enable({ apis: ["Date"] });
+    nextView(); // blank → tasks, sets lastManualSwitchAt = 0
+    mock.timers.tick(90_001); // expire grace period
+    autoSwitchTo("blank"); // first auto-switch succeeds
+    assert.equal(getView(), "blank");
+    autoSwitchTo("tasks"); // within 5s cooldown → suppressed
+    assert.equal(getView(), "blank");
+    mock.timers.tick(5_001);
+    autoSwitchTo("tasks"); // after cooldown → succeeds
+    assert.equal(getView(), "tasks");
   });
 });
