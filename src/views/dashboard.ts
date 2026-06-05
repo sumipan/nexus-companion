@@ -109,10 +109,8 @@ function buildCombinedText(
   if (charge && charge.ok) {
     lines.push(buildChargeText(extractMetrics(charge.data)));
   } else if (charge && !charge.ok) {
-    lines.push("LLM usage");
     lines.push(charge.error || "進捗データ取得失敗");
   } else {
-    lines.push("LLM usage");
     lines.push("loading...");
   }
 

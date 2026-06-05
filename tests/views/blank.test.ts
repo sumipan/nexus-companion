@@ -120,6 +120,28 @@ describe("blank view — auto-clear on same message", () => {
     await __activateForTest();
     assert.equal(upgradeContents[0], "Hello");
   });
+
+  it("starts cleared on re-activate when the same message was previously shown and cleared", async () => {
+    __setFetchMessageForTest(makeResults(["Hello", "Hello", "Hello"]));
+    unsubscribe = registerBlankLifecycle(mockBridge as never, CONFIG);
+
+    // First activate: shows "Hello"
+    await __activateForTest();
+    assert.equal(upgradeContents[0], "Hello");
+
+    // Same message on next poll → clears (lastClearedContent = "Hello")
+    await __pollOnceForTest();
+    assert.equal(upgradeContents[1], CLEAR_CONTENT);
+
+    // Simulate partial deactivate (view change, not full state reset)
+    nextView(); // tasks → dashboard, subscriber fires → deactivate()
+    __resetAutoSwitchTimersForTest();
+    upgradeContents = [];
+
+    // Re-activate: should start cleared immediately (no "Hello" flash)
+    await __activateForTest();
+    assert.equal(upgradeContents[0], CLEAR_CONTENT);
+  });
 });
 
 describe("blank view — auto-switch to blank on new message", () => {

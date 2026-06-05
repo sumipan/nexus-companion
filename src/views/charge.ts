@@ -104,7 +104,7 @@ function buildBar(percent: number): string {
 }
 
 export function buildChargeText(metrics: ChargeMetric[]): string {
-  const lines: string[] = ["LLM usage"];
+  const lines: string[] = [];
   for (const m of metrics) {
     const used = String(Math.round(m.usedPercent)).padStart(3, " ");
     const period = String(Math.round(m.periodPercent)).padStart(3, " ");
