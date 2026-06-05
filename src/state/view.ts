@@ -48,6 +48,11 @@ export function __resetAutoSwitchTimersForTest(): void {
   lastAutoSwitchAt = 0;
 }
 
+/** @internal test only */
+export function __setCurrentViewForTest(v: ViewName): void {
+  current = v;
+}
+
 // ─────────────────────────────────────────────────────────────
 // textEvent dispatcher
 // ─────────────────────────────────────────────────────────────
