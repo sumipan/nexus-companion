@@ -33,11 +33,40 @@ const POLL_INTERVAL_MS = 60_000;
 let cachedMessage: Result<string> | null = null;
 let inflightMessage: Promise<Result<string>> | null = null;
 
+// DI hook for testing
+let _fetchMessageImpl: (config: Config) => Promise<Result<string>> = fetchMessage;
+let _pollFn: (() => Promise<void>) | null = null;
+let _activateFn: (() => Promise<void>) | null = null;
+
+/** @internal test only */
+export function __setFetchMessageForTest(fn: (config: Config) => Promise<Result<string>>): void {
+  _fetchMessageImpl = fn;
+}
+/** @internal test only */
+export function __resetFetchMessageForTest(): void {
+  _fetchMessageImpl = fetchMessage;
+}
+/** @internal test only */
+export function __resetBlankStateForTest(): void {
+  cachedMessage = null;
+  inflightMessage = null;
+  _pollFn = null;
+  _activateFn = null;
+}
+/** @internal test only */
+export function __pollOnceForTest(): Promise<void> {
+  return _pollFn ? _pollFn() : Promise.resolve();
+}
+/** @internal test only */
+export function __activateForTest(): Promise<void> {
+  return _activateFn ? _activateFn() : Promise.resolve();
+}
+
 async function fetchMessageWithCache(
   config: Config,
 ): Promise<Result<string>> {
   if (inflightMessage) return inflightMessage;
-  inflightMessage = fetchMessage(config).then((r) => {
+  inflightMessage = _fetchMessageImpl(config).then((r) => {
     cachedMessage = r;
     inflightMessage = null;
     return r;
@@ -70,6 +99,7 @@ export function registerBlankLifecycle(
 ): () => void {
   let blankActive = false;
   let pollTimer: ReturnType<typeof setInterval> | undefined;
+  let lastContent: string | null = null;
 
   async function applyContent(content: string): Promise<void> {
     try {
@@ -92,15 +122,26 @@ export function registerBlankLifecycle(
   async function refresh(): Promise<void> {
     const result = await fetchMessageWithCache(config);
     if (!blankActive) return;
-    await applyContent(resultToContent(result));
+    const content = resultToContent(result);
+    if (lastContent !== null && content === lastContent) {
+      // 前回と同じメッセージ → 表示クリア
+      await applyContent(CLEAR_CONTENT);
+    } else {
+      await applyContent(content);
+      lastContent = content;
+    }
   }
+
+  _pollFn = refresh;
 
   async function activate(): Promise<void> {
     if (blankActive) return;
     blankActive = true;
     // cache hit があれば即描画
     if (cachedMessage !== null) {
-      await applyContent(resultToContent(cachedMessage));
+      const content = resultToContent(cachedMessage);
+      lastContent = content;
+      await applyContent(content);
       // 背景で最新化
       void refresh();
     } else {
@@ -111,8 +152,11 @@ export function registerBlankLifecycle(
     }, POLL_INTERVAL_MS);
   }
 
+  _activateFn = activate;
+
   function deactivate(): void {
     blankActive = false;
+    lastContent = null;
     if (pollTimer !== undefined) {
       clearInterval(pollTimer);
       pollTimer = undefined;
