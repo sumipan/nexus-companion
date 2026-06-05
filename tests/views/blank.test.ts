@@ -3,7 +3,12 @@ import { afterEach, beforeEach, describe, it } from "node:test";
 
 import type { Config } from "../../src/config.ts";
 import type { Result } from "../../src/api/types.ts";
-import { __setCurrentViewForTest } from "../../src/state/view.ts";
+import {
+  __resetAutoSwitchTimersForTest,
+  __setCurrentViewForTest,
+  getView,
+  nextView,
+} from "../../src/state/view.ts";
 import {
   __activateForTest,
   __pollOnceForTest,
@@ -114,5 +119,85 @@ describe("blank view — auto-clear on same message", () => {
     unsubscribe = registerBlankLifecycle(mockBridge as never, CONFIG);
     await __activateForTest();
     assert.equal(upgradeContents[0], "Hello");
+  });
+});
+
+describe("blank view — auto-switch to blank on new message", () => {
+  let unsubscribe: () => void;
+
+  beforeEach(() => {
+    upgradeContents = [];
+    __resetBlankStateForTest();
+    __resetAutoSwitchTimersForTest();
+    // Start from non-blank view so auto-switch has somewhere to switch from
+    __setCurrentViewForTest("tasks");
+  });
+
+  afterEach(() => {
+    if (unsubscribe) unsubscribe();
+    __resetFetchMessageForTest();
+    __resetBlankStateForTest();
+    __setCurrentViewForTest("blank");
+  });
+
+  it("auto-switches to blank and displays message when background poll detects new message", async () => {
+    __setFetchMessageForTest(makeResults(["新着メッセージ"]));
+    unsubscribe = registerBlankLifecycle(mockBridge as never, CONFIG);
+    assert.equal(getView(), "tasks");
+
+    await __pollOnceForTest();
+
+    assert.equal(getView(), "blank");
+    assert.equal(upgradeContents[0], "新着メッセージ");
+  });
+
+  it("does not auto-switch when message is empty (CLEAR_CONTENT)", async () => {
+    __setFetchMessageForTest(makeResults([null])); // null → メッセージ未配置 → CLEAR_CONTENT
+    unsubscribe = registerBlankLifecycle(mockBridge as never, CONFIG);
+
+    await __pollOnceForTest();
+
+    assert.equal(getView(), "tasks");
+    assert.equal(upgradeContents.length, 0);
+  });
+
+  it("does not auto-switch again when the same message is polled twice", async () => {
+    __setFetchMessageForTest(makeResults(["同じメッセージ", "同じメッセージ"]));
+    unsubscribe = registerBlankLifecycle(mockBridge as never, CONFIG);
+
+    // First poll: auto-switches to blank
+    await __pollOnceForTest();
+    assert.equal(getView(), "blank");
+
+    // Properly switch away (triggers deactivate via subscription listener)
+    nextView(); // blank → tasks, fires listener → deactivate()
+    __resetAutoSwitchTimersForTest();
+    upgradeContents = [];
+
+    // Second poll: same message → should NOT auto-switch
+    await __pollOnceForTest();
+
+    assert.equal(getView(), "tasks");
+    assert.equal(upgradeContents.length, 0);
+  });
+
+  it("auto-switches again when a new message arrives after the previous one", async () => {
+    __setFetchMessageForTest(makeResults(["最初のメッセージ", "新しいメッセージ"]));
+    unsubscribe = registerBlankLifecycle(mockBridge as never, CONFIG);
+
+    // First poll: auto-switches for first message
+    await __pollOnceForTest();
+    assert.equal(getView(), "blank");
+
+    // Properly switch away (triggers deactivate via subscription listener)
+    nextView(); // blank → tasks, fires listener → deactivate()
+    __resetAutoSwitchTimersForTest();
+    upgradeContents = [];
+
+    // Second poll: new message → should auto-switch again
+    await __pollOnceForTest();
+
+    assert.equal(getView(), "blank");
+    assert.equal(upgradeContents[0], "新しいメッセージ");
   });
 });
