@@ -101,6 +101,8 @@ export function registerBlankLifecycle(
   let pollTimer: ReturnType<typeof setInterval> | undefined;
   let lastContent: string | null = null;
   let lastSeenContent: string | null = null;
+  // 「表示→クリア」されたメッセージを記憶。re-activate 時に即クリアでフラッシュを防ぐ。
+  let lastClearedContent: string | null = null;
 
   async function applyContent(content: string): Promise<void> {
     try {
@@ -128,6 +130,7 @@ export function registerBlankLifecycle(
       // 非表示中: 新メッセージが来ていたら blank view へ自動切替
       if (content !== CLEAR_CONTENT && content !== lastSeenContent) {
         lastSeenContent = content;
+        lastClearedContent = null; // 新メッセージ → クリア済み状態をリセット
         autoSwitchTo("blank");
       }
       return;
@@ -136,10 +139,12 @@ export function registerBlankLifecycle(
     // 表示中: 前回と同じメッセージなら表示クリア
     if (lastContent !== null && content === lastContent) {
       await applyContent(CLEAR_CONTENT);
+      lastClearedContent = content;
     } else {
       await applyContent(content);
       lastContent = content;
       lastSeenContent = content;
+      lastClearedContent = null;
     }
   }
 
@@ -148,13 +153,18 @@ export function registerBlankLifecycle(
   async function activate(): Promise<void> {
     if (blankActive) return;
     blankActive = true;
-    // cache hit があれば即描画
     if (cachedMessage !== null) {
       const content = resultToContent(cachedMessage);
-      lastContent = content;
-      lastSeenContent = content;
-      await applyContent(content);
-      // 背景で最新化
+      if (content !== CLEAR_CONTENT && content === lastClearedContent) {
+        // 前回表示→クリア済みの同一メッセージ → フラッシュを防いで即クリア
+        await applyContent(CLEAR_CONTENT);
+        lastContent = content;
+      } else {
+        lastContent = content;
+        lastSeenContent = content;
+        lastClearedContent = null;
+        await applyContent(content);
+      }
       void refresh();
     } else {
       await refresh();

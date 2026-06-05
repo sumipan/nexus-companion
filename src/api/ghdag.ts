@@ -17,7 +17,7 @@ export type GhdagRow = {
 export async function fetchGhdagRows(
   config: Config,
 ): Promise<Result<GhdagRow[]>> {
-  const url = `${config.chargeServerUrl}/ghdag/rows`;
+  const url = `${config.chargeServerUrl}/ghdag/rows?limit=40`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
