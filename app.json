@@ -11,8 +11,8 @@
       "name": "network",
       "desc": "Access charge_server and ghdag UI on the LAN host",
       "whitelist": [
-        "http://100.100.80.120:8088",
-        "http://100.100.80.120:8080"
+        "http://100.105.166.81:8088",
+        "http://100.105.166.81:8080"
       ]
     }
   ],
