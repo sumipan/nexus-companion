@@ -11,6 +11,7 @@ import {
 } from "../../src/state/view.ts";
 import {
   __activateForTest,
+  __clearActivateGraceForTest,
   __pollOnceForTest,
   __resetBlankStateForTest,
   __resetFetchMessageForTest,
@@ -75,6 +76,7 @@ describe("blank view — auto-clear on same message", () => {
     await __activateForTest();
     assert.equal(upgradeContents[0], "こんにちは");
 
+    __clearActivateGraceForTest();
     await __pollOnceForTest();
     assert.equal(upgradeContents[1], CLEAR_CONTENT);
   });
@@ -95,6 +97,7 @@ describe("blank view — auto-clear on same message", () => {
     await __activateForTest();
     assert.equal(upgradeContents[0], "A");
 
+    __clearActivateGraceForTest();
     await __pollOnceForTest();
     assert.equal(upgradeContents[1], "B");
 
@@ -130,6 +133,7 @@ describe("blank view — auto-clear on same message", () => {
     assert.equal(upgradeContents[0], "Hello");
 
     // Same message on next poll → clears (lastClearedContent = "Hello")
+    __clearActivateGraceForTest();
     await __pollOnceForTest();
     assert.equal(upgradeContents[1], CLEAR_CONTENT);
 
