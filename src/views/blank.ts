@@ -37,6 +37,7 @@ let inflightMessage: Promise<Result<string>> | null = null;
 let _fetchMessageImpl: (config: Config) => Promise<Result<string>> = fetchMessage;
 let _pollFn: (() => Promise<void>) | null = null;
 let _activateFn: (() => Promise<void>) | null = null;
+let _clearActivateGraceFn: (() => void) | null = null;
 
 /** @internal test only */
 export function __setFetchMessageForTest(fn: (config: Config) => Promise<Result<string>>): void {
@@ -52,6 +53,7 @@ export function __resetBlankStateForTest(): void {
   inflightMessage = null;
   _pollFn = null;
   _activateFn = null;
+  _clearActivateGraceFn = null;
 }
 /** @internal test only */
 export function __pollOnceForTest(): Promise<void> {
@@ -60,6 +62,10 @@ export function __pollOnceForTest(): Promise<void> {
 /** @internal test only */
 export function __activateForTest(): Promise<void> {
   return _activateFn ? _activateFn() : Promise.resolve();
+}
+/** @internal test only — expire the activate grace period so poll can clear */
+export function __clearActivateGraceForTest(): void {
+  if (_clearActivateGraceFn) _clearActivateGraceFn();
 }
 
 async function fetchMessageWithCache(
@@ -103,6 +109,9 @@ export function registerBlankLifecycle(
   let lastSeenContent: string | null = null;
   // 「表示→クリア」されたメッセージを記憶。re-activate 時に即クリアでフラッシュを防ぐ。
   let lastClearedContent: string | null = null;
+  // activate 直後の refresh で既読クリアが即発火するのを防ぐ
+  const ACTIVATE_GRACE_MS = 5_000;
+  let activatedAt = 0;
 
   async function applyContent(content: string): Promise<void> {
     try {
@@ -136,8 +145,9 @@ export function registerBlankLifecycle(
       return;
     }
 
-    // 表示中: 前回と同じメッセージなら表示クリア
-    if (lastContent !== null && content === lastContent) {
+    // 表示中: 前回と同じメッセージなら表示クリア（activate 直後は猶予）
+    if (lastContent !== null && content === lastContent
+        && Date.now() - activatedAt >= ACTIVATE_GRACE_MS) {
       await applyContent(CLEAR_CONTENT);
       lastClearedContent = content;
     } else {
@@ -149,10 +159,12 @@ export function registerBlankLifecycle(
   }
 
   _pollFn = refresh;
+  _clearActivateGraceFn = () => { activatedAt = 0; };
 
   async function activate(): Promise<void> {
     if (blankActive) return;
     blankActive = true;
+    activatedAt = Date.now();
     if (cachedMessage !== null) {
       const content = resultToContent(cachedMessage);
       if (content !== CLEAR_CONTENT && content === lastClearedContent) {
