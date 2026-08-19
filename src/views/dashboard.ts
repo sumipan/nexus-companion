@@ -9,7 +9,7 @@ import {
 } from "../api/ghdag.ts";
 import type { Result } from "../api/types.ts";
 import type { Config } from "../config.ts";
-import { subscribe, type ViewName } from "../state/view.ts";
+import { getView, subscribe, type ViewName } from "../state/view.ts";
 
 import type { ChargeData } from "../api/charge.ts";
 import {
@@ -186,7 +186,14 @@ export function registerDashboardLifecycle(
     }
   };
 
-  return subscribe(onViewChange);
+  const unsubscribe = subscribe(onViewChange);
+
+  // dashboard が default view のため、起動時に current が dashboard なら即開始する
+  if (getView() === "dashboard") {
+    startDashboard(config, bridge);
+  }
+
+  return unsubscribe;
 }
 
 // charge 側の preload も dashboard 配下から再 export しておく
