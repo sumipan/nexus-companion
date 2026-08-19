@@ -1,18 +1,27 @@
 import assert from "node:assert/strict";
-import { afterEach, beforeEach, describe, it, mock } from "node:test";
+import { afterEach, beforeEach, describe, it } from "node:test";
 
 import type { GhdagRow } from "../../src/api/ghdag.ts";
+import type { ChargeData } from "../../src/api/charge.ts";
 import type { Config } from "../../src/config.ts";
-import { nextView } from "../../src/state/view.ts";
+import {
+  __resetViewStateForTest,
+  __setCurrentViewForTest,
+  nextView,
+} from "../../src/state/view.ts";
+import {
+  __resetChargeCacheForTest,
+  __resetFetchChargeForTest,
+  __setFetchChargeForTest,
+} from "../../src/views/charge.ts";
 import {
   __getPollTimerForTest,
   __pollOnceForTest,
   __resetDashboardStateForTest,
   __resetFetchGhdagRowsForTest,
   __setFetchGhdagRowsForTest,
-  aggregateByState,
-  buildSummaryText,
-  countsEqual,
+  bucketizeRows,
+  buildGhdagSummaryLine,
   registerDashboardLifecycle,
   startDashboard,
   stopDashboard,
@@ -23,20 +32,27 @@ const CONFIG: Config = {
   ghdagUiUrl: "http://localhost:8080",
 };
 
-const POLL_MS = 10_000;
+const CHARGE_DATA: ChargeData = {
+  updated_at: "2026-01-01T00:00:00Z",
+  claude: {
+    weekly: { used_percent: 50, reset_at: "2026-01-05T00:00:00Z" },
+    session_5h: { used_percent: 10, reset_at: "2026-01-01T05:00:00Z" },
+  },
+  cursor: {
+    monthly: {
+      total_percent: 40,
+      auto_percent: 30,
+      api_percent: 20,
+      reset_at: "2026-01-20T00:00:00Z",
+    },
+  },
+};
 
-type FetchResult =
-  | { ok: true; data: GhdagRow[] }
-  | { ok: false; error: string };
-
-let fetchResults: FetchResult[] = [];
-let rebuildCalls: string[] = [];
+let upgradeContents: string[] = [];
 
 const mockBridge = {
-  rebuildPageContainer: async (container: { textObject?: { content?: string }[] }) => {
-    const content = container.textObject?.[0]?.content ?? "";
-    rebuildCalls.push(content);
-    return true;
+  textContainerUpgrade: async (upgrade: { content?: string }) => {
+    upgradeContents.push(upgrade.content ?? "");
   },
 };
 
@@ -50,174 +66,104 @@ function row(state: string): GhdagRow {
   };
 }
 
-function nextFetchResult(): FetchResult {
-  const next = fetchResults.shift();
-  if (!next) {
-    return { ok: true, data: [] };
-  }
-  return next;
-}
+describe("dashboard — ghdag aggregation", () => {
+  it("bucketizeRows groups states into 4 buckets", () => {
+    const counts = bucketizeRows([
+      row("実行中"),
+      row("待機（依存未充足）"),
+      row("待機（実行可能）"),
+      row("完了（成功）"),
+      row("完了（その他）"),
+      row("完了（失敗）"),
+      row("完了（REJECTED）"),
+      row("完了（EMPTY_RESULT）"),
+    ]);
+    assert.deepEqual(counts, { 実行中: 1, 待機中: 2, 完了: 2, 失敗: 3 });
+  });
 
-describe("dashboard view", () => {
+  it("bucketizeRows ignores unknown states", () => {
+    const counts = bucketizeRows([row("謎の状態"), row("実行中")]);
+    assert.deepEqual(counts, { 実行中: 1, 待機中: 0, 完了: 0, 失敗: 0 });
+  });
+
+  it("buildGhdagSummaryLine formats counts on one line", () => {
+    assert.equal(
+      buildGhdagSummaryLine({ 実行中: 1, 待機中: 2, 完了: 3, 失敗: 4 }),
+      "実行中 1 / 待機中 2 / 完了 3 / 失敗 4",
+    );
+  });
+});
+
+describe("dashboard — lifecycle", () => {
   beforeEach(() => {
-    fetchResults = [];
-    rebuildCalls = [];
-    __setFetchGhdagRowsForTest(async () => nextFetchResult());
+    upgradeContents = [];
+    __resetDashboardStateForTest();
+    __resetChargeCacheForTest();
+    __resetViewStateForTest();
+    __setFetchChargeForTest(async () => ({ ok: true, data: CHARGE_DATA }));
+    __setFetchGhdagRowsForTest(async () => ({ ok: true, data: [row("実行中")] }));
   });
 
   afterEach(() => {
     __resetDashboardStateForTest();
+    __resetFetchChargeForTest();
     __resetFetchGhdagRowsForTest();
-    mock.timers.reset();
+    __resetChargeCacheForTest();
+    __resetViewStateForTest();
   });
 
-  it("aggregateByState groups rows by state", () => {
-    const counts = aggregateByState([
-      row("a"),
-      row("b"),
-      row("a"),
-    ]);
-    assert.deepEqual(counts, new Map([
-      ["a", 2],
-      ["b", 1],
-    ]));
-  });
-
-  it("aggregateByState returns an empty map for no rows", () => {
-    assert.equal(aggregateByState([]).size, 0);
-  });
-
-  it('buildSummaryText starts with "ghdag tasks"', () => {
-    const text = buildSummaryText(new Map([
-      ["a", 3],
-      ["b", 1],
-    ]));
-    assert.equal(text.split("\n")[0], "ghdag tasks");
-    assert.match(text, /total:\s+4$/m);
-  });
-
-  it("countsEqual detects identical maps", () => {
-    assert.equal(
-      countsEqual(new Map([["a", 1]]), new Map([["a", 1]])),
-      true,
-    );
-    assert.equal(
-      countsEqual(new Map([["a", 1]]), new Map([["a", 2]])),
-      false,
-    );
-  });
-
-  it("skips rebuildPageContainer when counts are unchanged", async () => {
-    fetchResults = [
-      { ok: true, data: [row("develop-running"), row("develop-running")] },
-      { ok: true, data: [row("develop-running"), row("develop-running")] },
-    ];
-
-    startDashboard(CONFIG, mockBridge as never);
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    assert.equal(rebuildCalls.length, 1);
-
-    await __pollOnceForTest();
-    assert.equal(rebuildCalls.length, 1);
-    stopDashboard();
-  });
-
-  it("calls rebuildPageContainer once when counts change", async () => {
-    fetchResults = [
-      { ok: true, data: [row("develop-running")] },
-      { ok: true, data: [row("develop-running"), row("review-pending")] },
-    ];
-
-    startDashboard(CONFIG, mockBridge as never);
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    assert.equal(rebuildCalls.length, 1);
-
-    await __pollOnceForTest();
-    assert.equal(rebuildCalls.length, 2);
-    stopDashboard();
-  });
-
-  it("polls every 10 seconds after startDashboard", async () => {
-    mock.timers.enable({ apis: ["setInterval"] });
-    fetchResults = [
-      { ok: true, data: [row("develop-running")] },
-      { ok: true, data: [row("review-pending")] },
-    ];
-
-    startDashboard(CONFIG, mockBridge as never);
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    assert.equal(rebuildCalls.length, 1);
-
-    mock.timers.tick(POLL_MS);
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    assert.equal(rebuildCalls.length, 2);
-    stopDashboard();
-  });
-
-  it("stopDashboard clears polling", async () => {
-    mock.timers.enable({ apis: ["setInterval"] });
-    fetchResults = [
-      { ok: true, data: [row("develop-running")] },
-      { ok: true, data: [row("review-pending")] },
-    ];
-
-    startDashboard(CONFIG, mockBridge as never);
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    stopDashboard();
-    assert.equal(__getPollTimerForTest(), null);
-
-    mock.timers.tick(POLL_MS);
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    assert.equal(rebuildCalls.length, 1);
-  });
-
-  it("shows ghdag connection error text without clearing previous counts", async () => {
-    fetchResults = [
-      { ok: true, data: [row("develop-running")] },
-      { ok: false, error: "ghdag UI に接続できません" },
-      { ok: true, data: [row("develop-running")] },
-      { ok: true, data: [row("develop-running"), row("review-pending")] },
-    ];
-
-    startDashboard(CONFIG, mockBridge as never);
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    assert.match(rebuildCalls[0], /develop-running/);
-
-    await __pollOnceForTest();
-    assert.equal(rebuildCalls[1], "ghdag UI に接続できません");
-
-    await __pollOnceForTest();
-    assert.equal(rebuildCalls.length, 2);
-
-    await __pollOnceForTest();
-    assert.equal(rebuildCalls.length, 3);
-    stopDashboard();
-  });
-
-  it("does not poll when a non-dashboard view is active", async () => {
-    fetchResults = [
-      { ok: true, data: [row("develop-running")] },
-      { ok: true, data: [row("review-pending")] },
-    ];
-
-    const unsubscribe = registerDashboardLifecycle(
-      CONFIG,
-      mockBridge as never,
-    );
-    assert.equal(__getPollTimerForTest(), null);
-
-    nextView();
+  it("starts polling immediately when dashboard is the current (default) view", async () => {
+    const unsubscribe = registerDashboardLifecycle(CONFIG, mockBridge as never);
     assert.notEqual(__getPollTimerForTest(), null);
     await new Promise((resolve) => setTimeout(resolve, 0));
-    assert.equal(rebuildCalls.length, 1);
+    assert.ok(upgradeContents.length >= 1);
+    unsubscribe();
+    stopDashboard();
+  });
 
-    nextView();
+  it("does not start when a non-dashboard view is current", () => {
+    __setCurrentViewForTest("message");
+    const unsubscribe = registerDashboardLifecycle(CONFIG, mockBridge as never);
+    assert.equal(__getPollTimerForTest(), null);
+    unsubscribe();
+    stopDashboard();
+  });
+
+  it("stops on switch to message and restarts on switch back", async () => {
+    const unsubscribe = registerDashboardLifecycle(CONFIG, mockBridge as never);
+    assert.notEqual(__getPollTimerForTest(), null);
+
+    nextView(); // dashboard → message
     assert.equal(__getPollTimerForTest(), null);
 
-    await __pollOnceForTest();
-    assert.equal(rebuildCalls.length, 1);
+    nextView(); // message → dashboard
+    assert.notEqual(__getPollTimerForTest(), null);
 
     unsubscribe();
+    stopDashboard();
+  });
+
+  it("renders combined charge + ghdag summary on poll", async () => {
+    startDashboard(CONFIG, mockBridge as never);
+    await __pollOnceForTest();
+    const last = upgradeContents[upgradeContents.length - 1] ?? "";
+    const lines = last.split("\n");
+    // LLM usage 4 行 + ghdag サマリ 1 行
+    assert.equal(lines.length, 5);
+    assert.match(lines[0] ?? "", /^Claude wk /);
+    assert.equal(lines[4], "実行中 1 / 待機中 0 / 完了 0 / 失敗 0");
+    stopDashboard();
+  });
+
+  it("renders error text when ghdag fetch fails", async () => {
+    __setFetchGhdagRowsForTest(async () => ({
+      ok: false,
+      error: "ghdag UI に接続できません",
+    }));
+    startDashboard(CONFIG, mockBridge as never);
+    await __pollOnceForTest();
+    const last = upgradeContents[upgradeContents.length - 1] ?? "";
+    assert.ok(last.includes("ghdag UI に接続できません"));
     stopDashboard();
   });
 });

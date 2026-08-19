@@ -1,19 +1,37 @@
 import type { Text_ItemEvent } from "@evenrealities/even_hub_sdk";
 
-export type ViewName = "blank" | "tasks" | "dashboard";
+export type ViewName = "message" | "dashboard";
 
-const ORDER: ViewName[] = ["blank", "tasks", "dashboard"];
+const ORDER: ViewName[] = ["dashboard", "message"];
+
+// メッセージ表示の表示時間。経過したら dashboard (ステータス表示) へ自動で戻す。
+// 手動タップ / 自動切替のどちらで message になった場合も適用する。
+export const MESSAGE_DISPLAY_MS = 30_000;
 
 type Listener = (v: ViewName) => void;
-let current: ViewName = "blank";
+let current: ViewName = "dashboard";
 const listeners: Set<Listener> = new Set();
 
-// Grace: after manual switch (nextView), suppress autoSwitchTo for 90s.
-// Cooldown: between auto-switches, enforce 5s minimum gap.
-const GRACE_MS = 90_000;
-const COOLDOWN_MS = 5_000;
-let lastManualSwitchAt = 0;
-let lastAutoSwitchAt = 0;
+let returnTimer: ReturnType<typeof setTimeout> | undefined;
+
+function setView(view: ViewName): void {
+  current = view;
+  // message になったら 30 秒後に dashboard へ戻すタイマーを張り直す。
+  // message 以外へ切り替わったら pending タイマーを破棄する。
+  if (returnTimer !== undefined) {
+    clearTimeout(returnTimer);
+    returnTimer = undefined;
+  }
+  if (view === "message") {
+    returnTimer = setTimeout(() => {
+      returnTimer = undefined;
+      if (current === "message") {
+        setView("dashboard");
+      }
+    }, MESSAGE_DISPLAY_MS);
+  }
+  listeners.forEach((fn) => fn(current));
+}
 
 export function getView(): ViewName {
   return current;
@@ -27,25 +45,21 @@ export function subscribe(fn: Listener): () => void {
 }
 
 export function nextView(): void {
-  lastManualSwitchAt = Date.now();
-  current = ORDER[(ORDER.indexOf(current) + 1) % ORDER.length];
-  listeners.forEach((fn) => fn(current));
+  setView(ORDER[(ORDER.indexOf(current) + 1) % ORDER.length]);
 }
 
 export function autoSwitchTo(view: ViewName): void {
-  const now = Date.now();
-  if (now - lastManualSwitchAt < GRACE_MS) return;
-  if (now - lastAutoSwitchAt < COOLDOWN_MS) return;
   if (current === view) return;
-  lastAutoSwitchAt = now;
-  current = view;
-  listeners.forEach((fn) => fn(current));
+  setView(view);
 }
 
-// テスト用: タイマー状態をリセット（タイムスタンプを過去に戻す）
-export function __resetAutoSwitchTimersForTest(): void {
-  lastManualSwitchAt = 0;
-  lastAutoSwitchAt = 0;
+// テスト用: current を初期状態 (dashboard) に戻し、pending タイマーを破棄する
+export function __resetViewStateForTest(): void {
+  if (returnTimer !== undefined) {
+    clearTimeout(returnTimer);
+    returnTimer = undefined;
+  }
+  current = "dashboard";
 }
 
 /** @internal test only */

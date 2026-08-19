@@ -10,12 +10,17 @@ import { autoSwitchTo, getView, subscribe, type ViewName } from "../state/view.t
 import { truncateToMaxWidth } from "../util/textWidth.ts";
 
 /**
- * blank View
+ * message View
  *
- * 起動時の default。秘書エージェントからの一言 (`${NIKKI_ROOT}/message.txt`
- * の本文) を glass に表示する。message.txt が無い時は空白 1 文字で
- * glass をクリアするだけにとどめる (`textContainerUpgrade({content: ""})` は
- * SDK で no-op になり前 view の描画が残るため半角スペース 1 個を送る)。
+ * 秘書エージェントからの一言 (`${NIKKI_ROOT}/message.txt` の本文) を glass に
+ * 表示する。受信済みメッセージは次のメッセージが来るまで表示し続ける
+ * (旧 blank view の「同一メッセージ再表示時にクリア」は v0.4.0 で廃止)。
+ * message.txt が無い時のみ空白 1 文字で glass をクリアする
+ * (`textContainerUpgrade({content: ""})` は SDK で no-op になり前 view の
+ * 描画が残るため半角スペース 1 個を送る)。
+ *
+ * 常時稼働ポーラーが新メッセージを検知したら message view へ自動切替する。
+ * ステータス表示への復帰は state/view.ts の表示時間タイマーが担う。
  *
  * 実装メモ (経緯):
  * - `bridge.shutDownPageContainer()` はアプリ終了系の API なので呼ばない
@@ -27,7 +32,7 @@ import { truncateToMaxWidth } from "../util/textWidth.ts";
 const CONTAINER_ID = 1;
 const CONTAINER_NAME = "main";
 const CLEAR_CONTENT = " "; // 空文字列は no-op になるので半角スペース 1 個で上書き
-const POLL_INTERVAL_MS = 60_000;
+const POLL_INTERVAL_MS = 30_000;
 
 // preload cache
 let cachedMessage: Result<string> | null = null;
@@ -37,7 +42,6 @@ let inflightMessage: Promise<Result<string>> | null = null;
 let _fetchMessageImpl: (config: Config) => Promise<Result<string>> = fetchMessage;
 let _pollFn: (() => Promise<void>) | null = null;
 let _activateFn: (() => Promise<void>) | null = null;
-let _clearActivateGraceFn: (() => void) | null = null;
 
 /** @internal test only */
 export function __setFetchMessageForTest(fn: (config: Config) => Promise<Result<string>>): void {
@@ -48,12 +52,11 @@ export function __resetFetchMessageForTest(): void {
   _fetchMessageImpl = fetchMessage;
 }
 /** @internal test only */
-export function __resetBlankStateForTest(): void {
+export function __resetMessageStateForTest(): void {
   cachedMessage = null;
   inflightMessage = null;
   _pollFn = null;
   _activateFn = null;
-  _clearActivateGraceFn = null;
 }
 /** @internal test only */
 export function __pollOnceForTest(): Promise<void> {
@@ -62,10 +65,6 @@ export function __pollOnceForTest(): Promise<void> {
 /** @internal test only */
 export function __activateForTest(): Promise<void> {
   return _activateFn ? _activateFn() : Promise.resolve();
-}
-/** @internal test only — expire the activate grace period so poll can clear */
-export function __clearActivateGraceForTest(): void {
-  if (_clearActivateGraceFn) _clearActivateGraceFn();
 }
 
 async function fetchMessageWithCache(
@@ -99,19 +98,16 @@ function resultToContent(result: Result<string>): string {
   return result.error;
 }
 
-export function registerBlankLifecycle(
+export function registerMessageLifecycle(
   bridge: EvenAppBridge,
   config: Config,
 ): () => void {
-  let blankActive = false;
+  let messageActive = false;
   let pollTimer: ReturnType<typeof setInterval> | undefined;
+  // 現在 glass に描画済みの content (表示中のみ有効)
   let lastContent: string | null = null;
+  // 最後に「ユーザーへ提示した」content。新着判定の基準 (非表示中も保持)。
   let lastSeenContent: string | null = null;
-  // 「表示→クリア」されたメッセージを記憶。re-activate 時に即クリアでフラッシュを防ぐ。
-  let lastClearedContent: string | null = null;
-  // activate 直後の refresh で既読クリアが即発火するのを防ぐ
-  const ACTIVATE_GRACE_MS = 5_000;
-  let activatedAt = 0;
 
   async function applyContent(content: string): Promise<void> {
     try {
@@ -125,7 +121,7 @@ export function registerBlankLifecycle(
     } catch (e) {
       // eslint-disable-next-line no-console
       console.warn(
-        "[blank] textContainerUpgrade failed:",
+        "[message] textContainerUpgrade failed:",
         e instanceof Error ? e.message : String(e),
       );
     }
@@ -135,48 +131,33 @@ export function registerBlankLifecycle(
     const result = await fetchMessageWithCache(config);
     const content = resultToContent(result);
 
-    if (!blankActive) {
-      // 非表示中: 新メッセージが来ていたら blank view へ自動切替
+    if (!messageActive) {
+      // 非表示中: 新メッセージが来ていたら message view へ自動切替
       if (content !== CLEAR_CONTENT && content !== lastSeenContent) {
         lastSeenContent = content;
-        lastClearedContent = null; // 新メッセージ → クリア済み状態をリセット
-        autoSwitchTo("blank");
+        autoSwitchTo("message");
       }
       return;
     }
 
-    // 表示中: 前回と同じメッセージなら表示クリア（activate 直後は猶予）
-    if (lastContent !== null && content === lastContent
-        && Date.now() - activatedAt >= ACTIVATE_GRACE_MS) {
-      await applyContent(CLEAR_CONTENT);
-      lastClearedContent = content;
-    } else {
+    // 表示中: content が変化した時だけ再描画 (同一なら表示継続)
+    if (content !== lastContent) {
       await applyContent(content);
       lastContent = content;
       lastSeenContent = content;
-      lastClearedContent = null;
     }
   }
 
   _pollFn = refresh;
-  _clearActivateGraceFn = () => { activatedAt = 0; };
 
   async function activate(): Promise<void> {
-    if (blankActive) return;
-    blankActive = true;
-    activatedAt = Date.now();
+    if (messageActive) return;
+    messageActive = true;
     if (cachedMessage !== null) {
       const content = resultToContent(cachedMessage);
-      if (content !== CLEAR_CONTENT && content === lastClearedContent) {
-        // 前回表示→クリア済みの同一メッセージ → フラッシュを防いで即クリア
-        await applyContent(CLEAR_CONTENT);
-        lastContent = content;
-      } else {
-        lastContent = content;
-        lastSeenContent = content;
-        lastClearedContent = null;
-        await applyContent(content);
-      }
+      lastContent = content;
+      lastSeenContent = content;
+      await applyContent(content);
       void refresh();
     } else {
       await refresh();
@@ -186,26 +167,26 @@ export function registerBlankLifecycle(
   _activateFn = activate;
 
   function deactivate(): void {
-    blankActive = false;
+    messageActive = false;
     lastContent = null;
     // pollTimer は常時稼働のため止めない（背景での自動切替検出を継続）
     // lastSeenContent はリセットしない（同じメッセージでの再切替を防ぐ）
   }
 
   const unsubscribe = subscribe((view: ViewName) => {
-    if (view === "blank") {
+    if (view === "message") {
       void activate();
     } else {
       deactivate();
     }
   });
 
-  // 常時稼働のバックグラウンドポーラー（blank 非表示時も動作）
+  // 常時稼働のバックグラウンドポーラー（message 非表示時も動作）
   pollTimer = setInterval(() => {
     void refresh();
   }, POLL_INTERVAL_MS);
 
-  if (getView() === "blank") {
+  if (getView() === "message") {
     void activate();
   }
 

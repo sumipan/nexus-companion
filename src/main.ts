@@ -56,15 +56,13 @@ import {
 } from "@evenrealities/even_hub_sdk";
 
 import { loadConfig } from "./config";
-import { startDataWatcher } from "./state/dataWatcher";
 import { dispatchTextEvent, nextView } from "./state/view";
-import { preloadMessage, registerBlankLifecycle } from "./views/blank";
 import {
   preloadCharge,
   preloadDashboard,
   registerDashboardLifecycle,
 } from "./views/dashboard";
-import { initTasksView, preloadTasks } from "./views/tasks";
+import { preloadMessage, registerMessageLifecycle } from "./views/message";
 
 log("2: imports resolved");
 
@@ -92,11 +90,11 @@ async function main(): Promise<void> {
   // ───────── event capture 用 container を起動時に 1 回 create ─────────
   // SDK の `isEventCapture: 1` を持つ container が glass 上に無いと、OS は
   // テンプル event をアプリに送らず OS デフォルト動作（ダッシュボードに戻る）に
-  // 消化してしまう。blank が default の構成で create が呼ばれないと event 自体
+  // 消化してしまう。create が呼ばれないと event 自体
   // 届かなくなる事象が実機で確認されたため、bootstrap で空 content の container
   // を 1 個だけ作って event capture を成立させる。
   //
-  // 後続の各 view (tasks / dashboard) は同じ containerID=1 に対して
+  // 後続の各 view (message / dashboard) は同じ containerID=1 に対して
   // textContainerUpgrade / rebuildPageContainer で content を上書きする。
   try {
     const initContainer = new CreateStartUpPageContainer({
@@ -120,14 +118,11 @@ async function main(): Promise<void> {
     log(`init container failed: ${e instanceof Error ? e.message : String(e)}`);
   }
 
-  registerBlankLifecycle(bridge, config);
-  log("5b: blank lifecycle registered (default view, shows secretary message)");
-
-  initTasksView(bridge, config);
-  log("6: tasks view registered");
+  registerMessageLifecycle(bridge, config);
+  log("5b: message lifecycle registered (shows secretary message)");
 
   registerDashboardLifecycle(config, bridge);
-  log("7: dashboard lifecycle registered (LLM usage + ghdag tasks)");
+  log("7: dashboard lifecycle registered (default view, LLM usage + ghdag tasks)");
 
   // ───────── 各 view のデータを背景で fire-and-forget で先取り ─────────
   // タップで view が切り替わった時に fetch 完了を待たず即描画できるようにする。
@@ -135,14 +130,9 @@ async function main(): Promise<void> {
   // bridge.onEvenHubEvent の登録より前に kick して、register 中にも fetch が
   // 進むようにする。
   void preloadMessage(config);
-  void preloadTasks(config);
   void preloadDashboard(config);
   void preloadCharge(config);
-  log("8a: preload kicked (message / tasks / dashboard / charge)");
-
-  // 指紋ベースの background watcher 起動 — message.txt 更新検知 → blank 自動切替
-  startDataWatcher(config);
-  log("8b: dataWatcher started");
+  log("8a: preload kicked (message / dashboard / charge)");
 
   // 右テンプルタップ間隔のデバウンス（同一タップで複数 event が飛ぶケースに備える）
   let lastTriggerAt = 0;

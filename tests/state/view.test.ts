@@ -2,44 +2,36 @@ import assert from "node:assert/strict";
 import { afterEach, describe, it, mock } from "node:test";
 
 import {
-  __resetAutoSwitchTimersForTest,
+  __resetViewStateForTest,
   autoSwitchTo,
   getView,
+  MESSAGE_DISPLAY_MS,
   nextView,
   subscribe,
 } from "../../src/state/view.ts";
 
-function resetState(): void {
-  while (getView() !== "blank") {
-    nextView();
-  }
-  __resetAutoSwitchTimersForTest();
-}
-
 describe("view state", () => {
   afterEach(() => {
-    resetState();
+    __resetViewStateForTest();
     mock.timers.reset();
   });
 
-  it("starts at blank", () => {
-    assert.equal(getView(), "blank");
+  it("starts at dashboard", () => {
+    assert.equal(getView(), "dashboard");
   });
 
-  it("cycles blank → tasks → dashboard → blank on three nextView calls", () => {
+  it("toggles dashboard → message → dashboard on nextView", () => {
     nextView();
-    assert.equal(getView(), "tasks");
+    assert.equal(getView(), "message");
     nextView();
     assert.equal(getView(), "dashboard");
-    nextView();
-    assert.equal(getView(), "blank");
   });
 
   it("notifies subscribe listeners on nextView", () => {
     const seen: string[] = [];
     const unsub = subscribe((v) => seen.push(v));
     nextView();
-    assert.deepEqual(seen, ["tasks"]);
+    assert.deepEqual(seen, ["message"]);
     unsub();
   });
 
@@ -54,61 +46,83 @@ describe("view state", () => {
 
 describe("autoSwitchTo", () => {
   afterEach(() => {
-    resetState();
+    __resetViewStateForTest();
     mock.timers.reset();
   });
 
-  it("switches view when no grace/cooldown active", () => {
-    nextView(); // blank → tasks
-    __resetAutoSwitchTimersForTest(); // clear grace set by nextView
-    autoSwitchTo("blank");
-    assert.equal(getView(), "blank");
-  });
-
-  it("is suppressed within 90s grace period after manual switch", () => {
-    mock.timers.enable({ apis: ["Date"] });
-    nextView(); // manual: blank → tasks, sets lastManualSwitchAt = now
-    autoSwitchTo("blank"); // within grace → suppressed
-    assert.equal(getView(), "tasks");
-  });
-
-  it("fires after grace period expires", () => {
-    mock.timers.enable({ apis: ["Date"] });
-    nextView(); // manual switch at T=0
-    mock.timers.tick(90_001);
-    autoSwitchTo("blank");
-    assert.equal(getView(), "blank");
-  });
-
-  it("does not switch when already on target view", () => {
-    __resetAutoSwitchTimersForTest();
+  it("switches view and notifies subscribers", () => {
     const seen: string[] = [];
     const unsub = subscribe((v) => seen.push(v));
-    autoSwitchTo("blank"); // already blank
+    autoSwitchTo("message");
+    assert.equal(getView(), "message");
+    assert.deepEqual(seen, ["message"]);
+    unsub();
+  });
+
+  it("does nothing when already on target view", () => {
+    const seen: string[] = [];
+    const unsub = subscribe((v) => seen.push(v));
+    autoSwitchTo("dashboard"); // already dashboard
+    assert.deepEqual(seen, []);
+    unsub();
+  });
+});
+
+describe("message display timer", () => {
+  afterEach(() => {
+    __resetViewStateForTest();
+    mock.timers.reset();
+  });
+
+  it("returns to dashboard after MESSAGE_DISPLAY_MS (manual switch)", () => {
+    mock.timers.enable({ apis: ["setTimeout"] });
+    nextView(); // dashboard → message
+    assert.equal(getView(), "message");
+    mock.timers.tick(MESSAGE_DISPLAY_MS - 1);
+    assert.equal(getView(), "message");
+    mock.timers.tick(1);
+    assert.equal(getView(), "dashboard");
+  });
+
+  it("returns to dashboard after MESSAGE_DISPLAY_MS (auto switch)", () => {
+    mock.timers.enable({ apis: ["setTimeout"] });
+    autoSwitchTo("message");
+    assert.equal(getView(), "message");
+    mock.timers.tick(MESSAGE_DISPLAY_MS);
+    assert.equal(getView(), "dashboard");
+  });
+
+  it("notifies subscribers when the timer returns to dashboard", () => {
+    mock.timers.enable({ apis: ["setTimeout"] });
+    autoSwitchTo("message");
+    const seen: string[] = [];
+    const unsub = subscribe((v) => seen.push(v));
+    mock.timers.tick(MESSAGE_DISPLAY_MS);
+    assert.deepEqual(seen, ["dashboard"]);
+    unsub();
+  });
+
+  it("is cancelled by a manual return to dashboard", () => {
+    mock.timers.enable({ apis: ["setTimeout"] });
+    nextView(); // → message
+    nextView(); // → dashboard (timer cleared)
+    const seen: string[] = [];
+    const unsub = subscribe((v) => seen.push(v));
+    mock.timers.tick(MESSAGE_DISPLAY_MS * 2);
+    assert.equal(getView(), "dashboard");
     assert.deepEqual(seen, []);
     unsub();
   });
 
-  it("notifies subscribers on successful auto-switch", () => {
-    nextView(); // blank → tasks
-    __resetAutoSwitchTimersForTest(); // clear grace timer set by nextView
-    const seen: string[] = [];
-    const unsub = subscribe((v) => seen.push(v));
-    autoSwitchTo("blank");
-    assert.deepEqual(seen, ["blank"]);
-    unsub();
-  });
-
-  it("is suppressed by 5s cooldown between consecutive auto-switches", () => {
-    mock.timers.enable({ apis: ["Date"] });
-    nextView(); // blank → tasks, sets lastManualSwitchAt = 0
-    mock.timers.tick(90_001); // expire grace period
-    autoSwitchTo("blank"); // first auto-switch succeeds
-    assert.equal(getView(), "blank");
-    autoSwitchTo("tasks"); // within 5s cooldown → suppressed
-    assert.equal(getView(), "blank");
-    mock.timers.tick(5_001);
-    autoSwitchTo("tasks"); // after cooldown → succeeds
-    assert.equal(getView(), "tasks");
+  it("is reset when message view is re-entered", () => {
+    mock.timers.enable({ apis: ["setTimeout"] });
+    nextView(); // → message (T=0)
+    mock.timers.tick(MESSAGE_DISPLAY_MS - 5_000);
+    nextView(); // → dashboard
+    nextView(); // → message (new timer)
+    mock.timers.tick(MESSAGE_DISPLAY_MS - 1);
+    assert.equal(getView(), "message");
+    mock.timers.tick(1);
+    assert.equal(getView(), "dashboard");
   });
 });
