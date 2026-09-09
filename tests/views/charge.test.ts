@@ -37,7 +37,7 @@ const CHARGE_DATA: ChargeData = {
 };
 
 describe("charge helpers", () => {
-  it("extractMetrics maps ChargeData to 4 metrics", () => {
+  it("extractMetrics maps ChargeData to 4 metrics when codex is absent", () => {
     const metrics = extractMetrics(CHARGE_DATA);
     assert.equal(metrics.length, 4);
     assert.deepEqual(
@@ -48,6 +48,25 @@ describe("charge helpers", () => {
     assert.equal(metrics[1]?.usedPercent, 10);
     assert.equal(metrics[2]?.usedPercent, 30);
     assert.equal(metrics[3]?.usedPercent, 20);
+  });
+
+  it("extractMetrics appends Codex 5h / Codex wk when codex is present", () => {
+    const withCodex: ChargeData = {
+      ...CHARGE_DATA,
+      codex: {
+        session_5h: { used_percent: 100, reset_at: "2026-09-10T02:13:57+09:00" },
+        weekly: { used_percent: 52, reset_at: "2026-09-15T13:07:05+09:00" },
+        credits: { balance: "0", has_credits: false },
+      },
+    };
+    const metrics = extractMetrics(withCodex);
+    assert.equal(metrics.length, 6);
+    assert.deepEqual(
+      metrics.map((m) => m.label),
+      ["Claude wk", "Claude 5h", "Cursor Au", "Cursor Ap", "Codex 5h", "Codex wk"],
+    );
+    assert.equal(metrics[4]?.usedPercent, 100);
+    assert.equal(metrics[5]?.usedPercent, 52);
   });
 
   it("buildChargeText renders one line per metric with bar and percents", () => {

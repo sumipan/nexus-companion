@@ -122,7 +122,7 @@ async function main(): Promise<void> {
   log("5b: message lifecycle registered (shows secretary message)");
 
   registerDashboardLifecycle(config, bridge);
-  log("7: dashboard lifecycle registered (default view, LLM usage + ghdag tasks)");
+  log("7: dashboard lifecycle registered (default view, LLM usage + ghdag tasks + queue)");
 
   // ───────── 各 view のデータを背景で fire-and-forget で先取り ─────────
   // タップで view が切り替わった時に fetch 完了を待たず即描画できるようにする。

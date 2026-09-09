@@ -72,7 +72,7 @@ export function extractMetrics(data: ChargeData): ChargeMetric[] {
     data.claude.session_5h.reset_at,
     FIVE_HOURS_DAYS,
   );
-  return [
+  const metrics: ChargeMetric[] = [
     {
       label: "Claude wk",
       usedPercent: data.claude.weekly.used_percent,
@@ -94,6 +94,24 @@ export function extractMetrics(data: ChargeData): ChargeMetric[] {
       periodPercent: monthProg,
     },
   ];
+  if (data.codex) {
+    metrics.push(
+      {
+        label: "Codex 5h",
+        usedPercent: data.codex.session_5h.used_percent,
+        periodPercent: progressPercent(
+          data.codex.session_5h.reset_at,
+          FIVE_HOURS_DAYS,
+        ),
+      },
+      {
+        label: "Codex wk",
+        usedPercent: data.codex.weekly.used_percent,
+        periodPercent: progressPercent(data.codex.weekly.reset_at, 7),
+      },
+    );
+  }
+  return metrics;
 }
 
 function buildBar(percent: number): string {
