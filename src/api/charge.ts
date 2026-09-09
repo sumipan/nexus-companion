@@ -17,6 +17,12 @@ export type ChargeData = {
       reset_at: string;
     };
   };
+  /** 古い charge_server 互換のため省略可能 */
+  codex?: {
+    session_5h: { used_percent: number; reset_at: string };
+    weekly: { used_percent: number; reset_at: string };
+    credits: { balance: string; has_credits: boolean };
+  };
 };
 
 export async function fetchCharge(config: Config): Promise<Result<ChargeData>> {

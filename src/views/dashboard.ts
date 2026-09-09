@@ -7,9 +7,15 @@ import {
   fetchGhdagRows as defaultFetchGhdagRows,
   type GhdagRow,
 } from "../api/ghdag.ts";
+import {
+  fetchIssuesmithQueue as defaultFetchIssuesmithQueue,
+  type QueueActiveItem,
+  type QueueData,
+} from "../api/issuesmith.ts";
 import type { Result } from "../api/types.ts";
 import type { Config } from "../config.ts";
 import { getView, subscribe, type ViewName } from "../state/view.ts";
+import { truncateToMaxWidth } from "../util/textWidth.ts";
 
 import type { ChargeData } from "../api/charge.ts";
 import {
@@ -22,8 +28,10 @@ import {
 
 const POLL_INTERVAL_MS = 10_000;
 type FetchGhdagRows = (config: Config) => Promise<Result<GhdagRow[]>>;
+type FetchQueue = (config: Config) => Promise<Result<QueueData>>;
 
 let fetchGhdagRows: FetchGhdagRows = defaultFetchGhdagRows;
+let fetchQueue: FetchQueue = defaultFetchIssuesmithQueue;
 
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let activeConfig: Config | null = null;
@@ -33,6 +41,9 @@ let activeBridge: EvenAppBridge | null = null;
 // 描画 latency を消す
 let cachedRows: Result<GhdagRow[]> | null = null;
 let inflightRows: Promise<Result<GhdagRow[]>> | null = null;
+
+let cachedQueue: Result<QueueData> | null = null;
+let inflightQueue: Promise<Result<QueueData>> | null = null;
 
 async function fetchRowsWithCache(config: Config): Promise<Result<GhdagRow[]>> {
   if (inflightRows) return inflightRows;
@@ -44,8 +55,21 @@ async function fetchRowsWithCache(config: Config): Promise<Result<GhdagRow[]>> {
   return inflightRows;
 }
 
+export async function fetchQueueWithCache(
+  config: Config,
+): Promise<Result<QueueData>> {
+  if (inflightQueue) return inflightQueue;
+  inflightQueue = fetchQueue(config).then((r) => {
+    cachedQueue = r;
+    inflightQueue = null;
+    return r;
+  });
+  return inflightQueue;
+}
+
 /** bootstrap で fire-and-forget で呼ぶ。背景で fetch して cache。 */
 export function preloadDashboard(config: Config): Promise<Result<GhdagRow[]>> {
+  void fetchQueueWithCache(config);
   return fetchRowsWithCache(config);
 }
 
@@ -98,10 +122,69 @@ export function buildGhdagSummaryLine(counts: BucketCounts): string {
   return `実行中 ${counts.実行中} / 待機中 ${counts.待機中} / 完了 ${counts.完了} / 失敗 ${counts.失敗}`;
 }
 
-// ─── 統合表示 (LLM usage + ghdag tasks サマリ) ─────────────────────────
-function buildCombinedText(
+// ─── issuesmith queue 行 ───────────────────────────────────────────────
+const PHASE_ABBR: Record<QueueActiveItem["phase"], string> = {
+  draft: "dr",
+  sub: "sb",
+  develop: "dev",
+  merge: "mg",
+};
+
+export function buildQueueLine(active: QueueActiveItem[]): string {
+  if (active.length === 0) {
+    return truncateToMaxWidth("Q -");
+  }
+  const shown = active.slice(0, 3);
+  const parts = shown.map((item) => {
+    const abbr = PHASE_ABBR[item.phase] ?? item.phase;
+    const bang = item.priority === "high" ? "!" : "";
+    return `#${item.issue} ${abbr}${bang}`;
+  });
+  let line = `Q ${parts.join(" > ")}`;
+  const rest = active.length - 3;
+  if (rest > 0) {
+    line += ` (+${rest})`;
+  }
+  return truncateToMaxWidth(line);
+}
+
+function formatResumeAt(resumeAt: string | null): string {
+  if (!resumeAt) return "??:??";
+  const d = new Date(resumeAt);
+  if (Number.isNaN(d.getTime())) return "??:??";
+  return d.toLocaleTimeString("ja-JP", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+export function buildStatusLine(queue: QueueData): string {
+  const parts: string[] = [];
+  if (queue.halt) {
+    parts.push("HALT");
+  }
+  if (queue.in_flight.length > 0) {
+    const runs = queue.in_flight
+      .map((item) => `${item.engine}#${item.issue}`)
+      .join(" ");
+    parts.push(`run ${runs}`);
+  }
+  for (const [name, state] of Object.entries(queue.engines)) {
+    if (state.status === "paused") {
+      parts.push(`pause ${name}~${formatResumeAt(state.resume_at)}`);
+    }
+  }
+  if (parts.length === 0) {
+    return truncateToMaxWidth("idle");
+  }
+  return truncateToMaxWidth(parts.join(" | "));
+}
+
+// ─── 統合表示 (LLM usage + queue + ghdag tasks サマリ) ─────────────────
+export function buildCombinedText(
   charge: Result<ChargeData> | null,
   rows: Result<GhdagRow[]> | null,
+  queue: Result<QueueData> | null,
 ): string {
   const lines: string[] = [];
 
@@ -112,6 +195,16 @@ function buildCombinedText(
     lines.push(charge.error || "進捗データ取得失敗");
   } else {
     lines.push("loading...");
+  }
+
+  // issuesmith キュー 2 行（失敗時は offline 1 行）
+  if (queue && queue.ok) {
+    lines.push(buildQueueLine(queue.data.active));
+    lines.push(buildStatusLine(queue.data));
+  } else if (queue && !queue.ok) {
+    lines.push("queue: offline");
+  } else {
+    lines.push("queue loading...");
   }
 
   // ghdag サマリ 1 行
@@ -137,16 +230,17 @@ async function applyContent(bridge: EvenAppBridge, content: string): Promise<voi
 }
 
 async function renderCurrent(bridge: EvenAppBridge): Promise<void> {
-  const text = buildCombinedText(getCachedCharge(), cachedRows);
+  const text = buildCombinedText(getCachedCharge(), cachedRows, cachedQueue);
   await applyContent(bridge, text);
 }
 
 async function pollOnce(): Promise<void> {
   if (!activeConfig || !activeBridge) return;
-  // 両方を並列に fetch (cache 経由でリクエスト重複排除)
+  // 3 系統を並列に fetch (cache 経由でリクエスト重複排除)
   await Promise.all([
     fetchChargeWithCache(activeConfig),
     fetchRowsWithCache(activeConfig),
+    fetchQueueWithCache(activeConfig),
   ]);
   if (!activeBridge) return;
   await renderCurrent(activeBridge);
@@ -215,6 +309,19 @@ export function __setFetchGhdagRowsForTest(fetchFn: FetchGhdagRows): void {
 
 export function __resetFetchGhdagRowsForTest(): void {
   fetchGhdagRows = defaultFetchGhdagRows;
+}
+
+export function __setFetchQueueForTest(fetchFn: FetchQueue): void {
+  fetchQueue = fetchFn;
+}
+
+export function __resetFetchQueueForTest(): void {
+  fetchQueue = defaultFetchIssuesmithQueue;
+}
+
+export function __resetQueueCacheForTest(): void {
+  cachedQueue = null;
+  inflightQueue = null;
 }
 
 export async function __pollOnceForTest(): Promise<void> {

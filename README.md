@@ -36,12 +36,23 @@ npm run build
 
 ## ビュー切替
 
-2 ビュー構成です。デフォルトは **ステータス表示**（LLM usage + ghdag タスク集計）。
+2 ビュー構成です。デフォルトは **ステータス表示**（LLM usage + issuesmith キュー + ghdag タスク集計）。
 
 - 右テンプル **シングルタップ** で ステータス表示 ⇄ メッセージ表示 をトグル
 - 新着メッセージを検知すると自動的に **メッセージ表示** へ切り替わります
 - メッセージ表示は **30 秒** 経過でステータス表示へ自動で戻ります（手動タップで開いた場合も同様）
 - メッセージは受信した内容を次のメッセージが来るまで表示し続けます
+
+### ステータス表示の項目
+
+| 行 | 内容 | データ源 |
+|----|------|---------|
+| Claude wk / Claude 5h | Claude 週次・5 時間枠の使用率バー | `/usage-data.json` |
+| Cursor Au / Cursor Ap | Cursor Auto・API の使用率バー | `/usage-data.json` |
+| Codex 5h / Codex wk | Codex 5 時間枠・週次の使用率バー（`codex` が応答に含まれる場合のみ） | `/usage-data.json` |
+| キュー行 | `Q #N phase > …`（先頭 3 件、超過は `(+N)`）。空なら `Q -` | `/issuesmith/queue` |
+| 状態行 | `run engine#issue` / `pause engine~HH:MM` / `HALT` / `idle` | `/issuesmith/queue` |
+| ghdag 集計 | 実行中 / 待機中 / 完了 / 失敗 | `/ghdag/rows` |
 
 ## `.ehpk` ビルド & サイドロード
 
@@ -91,7 +102,7 @@ npm run build:ehpk
 | ビュー | エラーメッセージ |
 |--------|----------------|
 | メッセージ | 「サーバに接続できません」 |
-| ステータス | 「進捗データ取得失敗」「ghdag UI に接続できません」 |
+| ステータス | 「進捗データ取得失敗」「queue: offline」「ghdag UI に接続できません」 |
 
 ## スクリーンショット
 
