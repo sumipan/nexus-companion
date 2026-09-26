@@ -46,6 +46,11 @@ export function getCachedCharge(): Result<ChargeData> | null {
   return cachedCharge;
 }
 
+/** Replace the cache when a `usage` event arrives on `/events`. */
+export function setCachedCharge(result: Result<ChargeData>): void {
+  cachedCharge = result;
+}
+
 export type ChargeMetric = {
   label: string;
   // 実使用率 (0-100)。バー描画の埋め率はこれ

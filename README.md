@@ -54,6 +54,15 @@ npm run build
 | 状態行 | `run engine#issue` / `pause engine~HH:MM` / `HALT` / `idle` | `/issuesmith/queue` |
 | ghdag 集計 | 実行中 / 待機中 / 完了 / 失敗 | `/ghdag/rows` |
 
+## Update mechanism
+
+The display subscribes to charge_server `GET /events` (SSE). A single connection is opened at startup and the 4 event types `message` / `usage` / `rows` / `queue` are fanned out to each view (updates land within about 1-2 seconds).
+
+- The subscription transport is chosen in order: `EventSource`, then a `fetch` stream. The `fetch` stream reconnects 3 seconds after a disconnect
+- **While connected**, no polling of `/message` / `/ghdag/rows` etc. is performed
+- **While disconnected** (connect failure / dropped), or where neither transport is available, a fallback poll every **60 seconds** fetches from the existing endpoints
+- On returning to the foreground (`visibilitychange` / SDK launch source / `FOREGROUND_ENTER_EVENT`), it reconnects if disconnected and fetches each view once
+
 ## `.ehpk` ビルド & サイドロード
 
 Even Hub への配布には `app.json` マニフェストと `.ehpk` パッケージが必要です。

@@ -24,9 +24,11 @@ import {
   fetchChargeWithCache,
   getCachedCharge,
   preloadCharge as preloadChargeImpl,
+  setCachedCharge,
 } from "./charge.ts";
 
-const POLL_INTERVAL_MS = 10_000;
+// Interval of the fallback poll that runs only while `/events` is disconnected
+const FALLBACK_POLL_INTERVAL_MS = 60_000;
 type FetchGhdagRows = (config: Config) => Promise<Result<GhdagRow[]>>;
 type FetchQueue = (config: Config) => Promise<Result<QueueData>>;
 
@@ -36,6 +38,7 @@ let fetchQueue: FetchQueue = defaultFetchIssuesmithQueue;
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let activeConfig: Config | null = null;
 let activeBridge: EvenAppBridge | null = null;
+let streamConnected = false;
 
 // preload cache: bootstrap で fire-and-forget で fetch しておき、activate 時の
 // 描画 latency を消す
@@ -246,6 +249,20 @@ async function pollOnce(): Promise<void> {
   await renderCurrent(activeBridge);
 }
 
+function startPollTimer(): void {
+  if (pollTimer !== null || !activeConfig) return;
+  pollTimer = setInterval(() => {
+    void pollOnce();
+  }, FALLBACK_POLL_INTERVAL_MS);
+}
+
+function stopPollTimer(): void {
+  if (pollTimer !== null) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+}
+
 export function startDashboard(config: Config, bridge: EvenAppBridge): void {
   stopDashboard();
   activeConfig = config;
@@ -254,18 +271,58 @@ export function startDashboard(config: Config, bridge: EvenAppBridge): void {
   // 続けて背景で両方の最新化を試みる。
   void renderCurrent(bridge);
   void pollOnce();
-  pollTimer = setInterval(() => {
-    void pollOnce();
-  }, POLL_INTERVAL_MS);
+  // While `/events` is connected, updates are pushed, so do not poll
+  if (!streamConnected) {
+    startPollTimer();
+  }
 }
 
 export function stopDashboard(): void {
-  if (pollTimer !== null) {
-    clearInterval(pollTimer);
-    pollTimer = null;
-  }
+  stopPollTimer();
   activeConfig = null;
   activeBridge = null;
+}
+
+/** `/events` connection state. Stop polling while connected; fetch every 60 s only while disconnected. */
+export function setDashboardStreamConnected(connected: boolean): void {
+  streamConnected = connected;
+  if (connected) {
+    stopPollTimer();
+  } else {
+    startPollTimer();
+  }
+}
+
+function rerenderIfActive(): Promise<void> {
+  return activeBridge ? renderCurrent(activeBridge) : Promise.resolve();
+}
+
+/** Receiver for `/events` `rows` events. Updates the cache and redraws if visible. */
+export function receiveRowsEvent(rows: Result<GhdagRow[]>): Promise<void> {
+  cachedRows = rows;
+  return rerenderIfActive();
+}
+
+/** Receiver for `/events` `queue` events. Updates the cache and redraws if visible. */
+export function receiveQueueEvent(queue: Result<QueueData>): Promise<void> {
+  cachedQueue = queue;
+  return rerenderIfActive();
+}
+
+/** Receiver for `/events` `usage` events. Updates the charge cache and redraws if visible. */
+export function receiveUsageEvent(charge: Result<ChargeData>): Promise<void> {
+  setCachedCharge(charge);
+  return rerenderIfActive();
+}
+
+/** Fetch all 3 sources once (e.g. on foreground return) and redraw if visible. */
+export async function refreshDashboardOnce(config: Config): Promise<void> {
+  await Promise.all([
+    fetchChargeWithCache(config),
+    fetchRowsWithCache(config),
+    fetchQueueWithCache(config),
+  ]);
+  await rerenderIfActive();
 }
 
 export function registerDashboardLifecycle(
@@ -297,6 +354,7 @@ export const preloadCharge = preloadChargeImpl;
 // ─── test helpers ─────────────────────────────────────────────────────
 export function __resetDashboardStateForTest(): void {
   stopDashboard();
+  streamConnected = false;
 }
 
 export function __getPollTimerForTest(): ReturnType<typeof setInterval> | null {
