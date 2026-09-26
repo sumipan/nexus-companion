@@ -19,9 +19,9 @@ import { truncateToMaxWidth } from "../util/textWidth.ts";
  * (`textContainerUpgrade({content: ""})` は SDK で no-op になり前 view の
  * 描画が残るため半角スペース 1 個を送る)。
  *
- * 新メッセージは charge_server の `/events` (`message` イベント) で受け取り、
- * 非表示中なら message view へ自動切替する。`/events` に接続できていない間だけ
- * 60 秒の保険ポーリングで `/message` を取得する。
+ * New messages arrive via charge_server `/events` (`message` event); when hidden,
+ * it auto-switches to the message view. Only while `/events` is disconnected,
+ * a 60-second fallback poll fetches `/message`.
  * ステータス表示への復帰は state/view.ts の表示時間タイマーが担う。
  *
  * 実装メモ (経緯):
@@ -46,7 +46,7 @@ let _pollFn: (() => Promise<void>) | null = null;
 let _applyResultFn: ((result: Result<string>) => Promise<void>) | null = null;
 let _activateFn: (() => Promise<void>) | null = null;
 
-// 保険ポーリング: `/events` 未接続の間だけ動かす
+// Fallback polling: runs only while `/events` is disconnected
 let streamConnected = false;
 let pollTimer: ReturnType<typeof setInterval> | undefined;
 
@@ -112,7 +112,7 @@ function stopMessagePoller(): void {
   }
 }
 
-/** `/events` の接続状態。接続中はポーリングを止め、未接続時のみ 60 秒で取得する。 */
+/** `/events` connection state. Stop polling while connected; fetch every 60 s only while disconnected. */
 export function setMessageStreamConnected(connected: boolean): void {
   streamConnected = connected;
   if (connected) {
@@ -122,13 +122,13 @@ export function setMessageStreamConnected(connected: boolean): void {
   }
 }
 
-/** `/events` の `message` イベントの受信口。fetch 結果と同じ分岐に通す。 */
+/** Receiver for `/events` `message` events. Goes through the same branch as fetch results. */
 export function receiveMessageEvent(result: Result<string>): Promise<void> {
   cachedMessage = result;
   return _applyResultFn ? _applyResultFn(result) : Promise.resolve();
 }
 
-/** フォアグラウンド復帰時などに 1 回だけ `/message` を取得する。 */
+/** Fetch `/message` once (e.g. on foreground return). */
 export function refreshMessageOnce(): Promise<void> {
   return _pollFn ? _pollFn() : Promise.resolve();
 }
@@ -221,7 +221,7 @@ export function registerMessageLifecycle(
   function deactivate(): void {
     messageActive = false;
     lastContent = null;
-    // 保険ポーラー / `/events` は表示に関係なく動かす（背景での自動切替検出を継続）
+    // fallback poller / `/events` run regardless of visibility (keeps background auto-switch detection)
     // lastSeenContent はリセットしない（同じメッセージでの再切替を防ぐ）
   }
 
@@ -233,7 +233,7 @@ export function registerMessageLifecycle(
     }
   });
 
-  // `/events` 未接続の間だけ保険ポーラーを動かす（message 非表示時も動作）
+  // Run the fallback poller only while `/events` is disconnected (also when message is hidden)
   if (!streamConnected) {
     startMessagePoller();
   }

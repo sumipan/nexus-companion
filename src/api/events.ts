@@ -1,14 +1,14 @@
 import type { Config } from "../config";
 
 /**
- * charge_server の `GET /events` (SSE) 購読。
+ * Subscription to charge_server `GET /events` (SSE).
  *
- * `message` / `usage` / `rows` / `queue` の 4 種が 1 本に多重化されて届く。
- * 接続時に 4 種の現在値が 1 回ずつ送られ、以後は変化時のみ。15 秒ごとに
- * `: ping` の heartbeat が来る。
+ * The 4 types `message` / `usage` / `rows` / `queue` are multiplexed on one stream.
+ * On connect, the current value of each type is sent once, then only on change. A
+ * `: ping` heartbeat arrives every 15 seconds.
  *
- * 購読方式は `EventSource` → `fetch` ストリーム → 購読不可 (null) の順に選ぶ。
- * null / 未接続時のポーリングへの切替は呼び出し側 (main.ts) が担う。
+ * Transport is chosen in order: `EventSource` -> `fetch` stream -> unavailable (null).
+ * Switching to polling on null / disconnect is the caller's (main.ts) job.
  */
 
 export type SseEvent = { event: string; id: string | null; data: string };
@@ -19,9 +19,9 @@ const EVENT_TYPES = ["message", "usage", "rows", "queue"] as const;
 const RETRY_MS = 3000;
 
 /**
- * 受信済みバッファから空行区切りで確定したイベントだけを取り出す。
- * 未完の末尾は `rest` に返すので、次のチャンクと連結して再度渡す。
- * `:` で始まるコメント行 (heartbeat) は無視し、`data:` 複数行は `\n` で連結する。
+ * Extract only the events completed by a blank line from the received buffer.
+ * The incomplete tail is returned as `rest`; prepend it to the next chunk.
+ * Comment lines starting with `:` (heartbeat) are ignored; multiple `data:` lines are joined with `\n`.
  */
 export function parseSseChunk(buffer: string): { events: SseEvent[]; rest: string } {
   const normalized = buffer.replace(/\r\n?/g, "\n");
@@ -46,7 +46,7 @@ export function parseSseChunk(buffer: string): { events: SseEvent[]; rest: strin
       else if (field === "id") id = value;
       else if (field === "data") data.push(value);
     }
-    // data 行の無いブロック (heartbeat 等) はイベントにしない
+    // blocks without a data line (heartbeat etc.) are not events
     if (data.length > 0) {
       events.push({ event, id, data: data.join("\n") });
     }
@@ -59,8 +59,8 @@ function isKnownType(event: string): boolean {
 }
 
 /**
- * `/events` を購読する。接続状態は変化時のみ `onState` に通知する
- * (最初の結果は必ず通知する)。どの方式も使えない環境では null を返す。
+ * Subscribe to `/events`. Connection state is reported to `onState` only on change
+ * (the first result is always reported). Returns null if no transport is available.
  */
 export function subscribeEvents(
   config: Config,
@@ -102,7 +102,7 @@ function subscribeWithEventSource(
     es.onopen = () => setConnected(true);
     es.onerror = () => {
       setConnected(false);
-      // EventSource は自前で再接続するが、CLOSED になった場合は諦めるので張り直す
+      // EventSource reconnects on its own, but gives up once CLOSED, so re-open it
       if (es.readyState === EventSource.CLOSED && !closed && source === es) {
         retryTimer = setTimeout(open, RETRY_MS);
       }
@@ -159,7 +159,7 @@ function subscribeWithFetch(
         }
       }
     } catch {
-      // 切断・接続失敗は下で再試行する
+      // disconnects / connect failures are retried below
     }
     if (closed || gen !== generation) return;
     setConnected(false);

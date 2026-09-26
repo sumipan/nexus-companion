@@ -26,7 +26,7 @@ def test_main_subscribes_once_and_dispatches():
     content = _read("src/main.ts")
     assert 'from "./api/events"' in content
     assert len(re.findall(r"\bsubscribeEvents\(", content)) == 1
-    # 3 ビューへ配る
+    # dispatched to the 3 views
     assert "receiveMessageEvent" in content
     assert "receiveRowsEvent" in content
     assert "receiveQueueEvent" in content
@@ -58,7 +58,7 @@ def test_fallback_poll_interval_is_60s():
     for path in ("src/views/message.ts", "src/views/dashboard.ts"):
         content = _read(path)
         assert "FALLBACK_POLL_INTERVAL_MS = 60_000" in content, path
-        # 旧 30 秒 / 10 秒の常時ポーラーは残さない
+        # the old always-on 30 s / 10 s pollers must not remain
         assert "30_000" not in content, path
         assert "10_000" not in content, path
 
@@ -93,4 +93,4 @@ def test_charge_view_has_cache_setter():
 def test_readme_documents_events_and_fallback():
     content = _read("README.md")
     assert "/events" in content
-    assert "60 秒" in content
+    assert "60 seconds" in content

@@ -27,7 +27,7 @@ import {
   setCachedCharge,
 } from "./charge.ts";
 
-// `/events` 未接続の間だけ動かす保険ポーリングの間隔
+// Interval of the fallback poll that runs only while `/events` is disconnected
 const FALLBACK_POLL_INTERVAL_MS = 60_000;
 type FetchGhdagRows = (config: Config) => Promise<Result<GhdagRow[]>>;
 type FetchQueue = (config: Config) => Promise<Result<QueueData>>;
@@ -271,7 +271,7 @@ export function startDashboard(config: Config, bridge: EvenAppBridge): void {
   // 続けて背景で両方の最新化を試みる。
   void renderCurrent(bridge);
   void pollOnce();
-  // `/events` 接続中は push で更新されるのでポーリングしない
+  // While `/events` is connected, updates are pushed, so do not poll
   if (!streamConnected) {
     startPollTimer();
   }
@@ -283,7 +283,7 @@ export function stopDashboard(): void {
   activeBridge = null;
 }
 
-/** `/events` の接続状態。接続中はポーリングを止め、未接続時のみ 60 秒で取得する。 */
+/** `/events` connection state. Stop polling while connected; fetch every 60 s only while disconnected. */
 export function setDashboardStreamConnected(connected: boolean): void {
   streamConnected = connected;
   if (connected) {
@@ -297,25 +297,25 @@ function rerenderIfActive(): Promise<void> {
   return activeBridge ? renderCurrent(activeBridge) : Promise.resolve();
 }
 
-/** `/events` の `rows` イベントの受信口。キャッシュを更新し、表示中なら再描画。 */
+/** Receiver for `/events` `rows` events. Updates the cache and redraws if visible. */
 export function receiveRowsEvent(rows: Result<GhdagRow[]>): Promise<void> {
   cachedRows = rows;
   return rerenderIfActive();
 }
 
-/** `/events` の `queue` イベントの受信口。キャッシュを更新し、表示中なら再描画。 */
+/** Receiver for `/events` `queue` events. Updates the cache and redraws if visible. */
 export function receiveQueueEvent(queue: Result<QueueData>): Promise<void> {
   cachedQueue = queue;
   return rerenderIfActive();
 }
 
-/** `/events` の `usage` イベントの受信口。charge キャッシュを更新し、表示中なら再描画。 */
+/** Receiver for `/events` `usage` events. Updates the charge cache and redraws if visible. */
 export function receiveUsageEvent(charge: Result<ChargeData>): Promise<void> {
   setCachedCharge(charge);
   return rerenderIfActive();
 }
 
-/** フォアグラウンド復帰時などに 3 系統を 1 回取得し、表示中なら再描画。 */
+/** Fetch all 3 sources once (e.g. on foreground return) and redraw if visible. */
 export async function refreshDashboardOnce(config: Config): Promise<void> {
   await Promise.all([
     fetchChargeWithCache(config),

@@ -94,16 +94,16 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 }
 
 /**
- * `/events` の 4 種を各ビューのキャッシュへ配る。
- * 失敗時の文言は各ビューの fetch 関数と揃える。
+ * Fan out the 4 `/events` types to each view's cache.
+ * Error strings match those of each view's fetch function (src/api/*.ts).
  */
 function dispatchStreamEvent(e: SseEvent): void {
   switch (e.event) {
     case "message":
-      // 空文字は message.txt 未配置
+      // empty string means message.txt is not present
       void receiveMessageEvent(
         e.data.length === 0
-          ? { ok: false, error: "メッセージ未配置" }
+          ? { ok: false, error: "\u30e1\u30c3\u30bb\u30fc\u30b8\u672a\u914d\u7f6e" }
           : { ok: true, data: e.data },
       );
       break;
@@ -112,7 +112,7 @@ function dispatchStreamEvent(e: SseEvent): void {
       void receiveUsageEvent(
         isRecord(v) && "claude" in v
           ? { ok: true, data: v as ChargeData }
-          : { ok: false, error: "進捗データ取得失敗" },
+          : { ok: false, error: "\u9032\u6357\u30c7\u30fc\u30bf\u53d6\u5f97\u5931\u6557" },
       );
       break;
     }
@@ -121,7 +121,7 @@ function dispatchStreamEvent(e: SseEvent): void {
       void receiveRowsEvent(
         Array.isArray(v)
           ? { ok: true, data: v as GhdagRow[] }
-          : { ok: false, error: "ghdag UI に接続できません" },
+          : { ok: false, error: "ghdag UI \u306b\u63a5\u7d9a\u3067\u304d\u307e\u305b\u3093" },
       );
       break;
     }
@@ -130,7 +130,7 @@ function dispatchStreamEvent(e: SseEvent): void {
       void receiveQueueEvent(
         isRecord(v) && !("error" in v)
           ? { ok: true, data: v as QueueData }
-          : { ok: false, error: "issuesmith queue 取得失敗" },
+          : { ok: false, error: "issuesmith queue \u53d6\u5f97\u5931\u6557" },
       );
       break;
     }
@@ -205,9 +205,9 @@ async function main(): Promise<void> {
   void preloadCharge(config);
   log("8a: preload kicked (message / dashboard / charge)");
 
-  // ───────── charge_server `/events` (SSE) を 1 本だけ購読 ─────────
-  // 接続中は各ビューのポーリングを止め、未接続 / 購読不可の間だけ 60 秒の
-  // 保険ポーリングで取得する。
+  // --------- subscribe to charge_server `/events` (SSE) exactly once ---------
+  // While connected, per-view polling is stopped; only while disconnected /
+  // unavailable, a 60-second fallback poll fetches the data.
   let streamConnected = false;
   const setStreamConnected = (connected: boolean): void => {
     streamConnected = connected;
@@ -223,7 +223,7 @@ async function main(): Promise<void> {
     log("8b: /events subscription started");
   }
 
-  // フォアグラウンド復帰: 未接続なら再接続し、各ビューを 1 回取得する
+  // Foreground return: reconnect if disconnected and fetch each view once
   const onForeground = (reason: string): void => {
     log(`foreground (${reason})`);
     if (events && !streamConnected) {

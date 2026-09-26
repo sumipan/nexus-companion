@@ -54,14 +54,14 @@ npm run build
 | 状態行 | `run engine#issue` / `pause engine~HH:MM` / `HALT` / `idle` | `/issuesmith/queue` |
 | ghdag 集計 | 実行中 / 待機中 / 完了 / 失敗 | `/ghdag/rows` |
 
-## 更新方式
+## Update mechanism
 
-表示は charge_server の `GET /events`（SSE）を購読して更新します。起動時に 1 本だけ接続し、`message` / `usage` / `rows` / `queue` の 4 種を各ビューへ配ります（反映は 1〜2 秒程度）。
+The display subscribes to charge_server `GET /events` (SSE). A single connection is opened at startup and the 4 event types `message` / `usage` / `rows` / `queue` are fanned out to each view (updates land within about 1-2 seconds).
 
-- 購読方式は `EventSource` → `fetch` ストリームの順に選びます。`fetch` ストリームは切断時に 3 秒後に再接続します
-- **接続中** は `/message` / `/ghdag/rows` などへのポーリングを行いません
-- **未接続**（接続失敗・切断中）や、どちらの方式も使えない環境では、**60 秒** 間隔の保険ポーリングで従来の各エンドポイントから取得します
-- フォアグラウンド復帰（`visibilitychange` / SDK の launch source・`FOREGROUND_ENTER_EVENT`）時は、未接続なら再接続し、各ビューを 1 回取得します
+- The subscription transport is chosen in order: `EventSource`, then a `fetch` stream. The `fetch` stream reconnects 3 seconds after a disconnect
+- **While connected**, no polling of `/message` / `/ghdag/rows` etc. is performed
+- **While disconnected** (connect failure / dropped), or where neither transport is available, a fallback poll every **60 seconds** fetches from the existing endpoints
+- On returning to the foreground (`visibilitychange` / SDK launch source / `FOREGROUND_ENTER_EVENT`), it reconnects if disconnected and fetches each view once
 
 ## `.ehpk` ビルド & サイドロード
 

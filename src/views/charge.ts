@@ -46,7 +46,7 @@ export function getCachedCharge(): Result<ChargeData> | null {
   return cachedCharge;
 }
 
-/** `/events` の `usage` 受信時にキャッシュを差し替える。 */
+/** Replace the cache when a `usage` event arrives on `/events`. */
 export function setCachedCharge(result: Result<ChargeData>): void {
   cachedCharge = result;
 }

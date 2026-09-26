@@ -88,7 +88,7 @@ describe("subscribeEvents", () => {
       const body = new ReadableStream<Uint8Array>({
         start(controller) {
           for (const c of chunks) controller.enqueue(encoder.encode(c));
-          // stream を開いたままにする (close() で abort される)
+          // keep the stream open (aborted by close())
         },
       });
       return new Response(body, { status: 200 });
@@ -107,7 +107,7 @@ describe("subscribeEvents", () => {
 
     assert.equal(requestedUrl, "http://localhost:8088/events");
     assert.deepEqual(states, [true]);
-    // 4 種以外 (diary) は配らない
+    // types other than the 4 (diary) are not dispatched
     assert.deepEqual(events, [
       { event: "message", id: "a", data: "hi" },
       { event: "rows", id: null, data: "[]" },
