@@ -55,16 +55,87 @@ import {
   waitForEvenAppBridge,
 } from "@evenrealities/even_hub_sdk";
 
+import type { ChargeData } from "./api/charge";
+import { subscribeEvents, type SseEvent } from "./api/events";
+import type { GhdagRow } from "./api/ghdag";
+import type { QueueData } from "./api/issuesmith";
 import { loadConfig } from "./config";
 import { dispatchTextEvent, nextView } from "./state/view";
 import {
   preloadCharge,
   preloadDashboard,
+  receiveQueueEvent,
+  receiveRowsEvent,
+  receiveUsageEvent,
+  refreshDashboardOnce,
   registerDashboardLifecycle,
+  setDashboardStreamConnected,
 } from "./views/dashboard";
-import { preloadMessage, registerMessageLifecycle } from "./views/message";
+import {
+  preloadMessage,
+  receiveMessageEvent,
+  refreshMessageOnce,
+  registerMessageLifecycle,
+  setMessageStreamConnected,
+} from "./views/message";
 
 log("2: imports resolved");
+
+function parseJson(data: string): unknown {
+  try {
+    return JSON.parse(data);
+  } catch {
+    return undefined;
+  }
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+/**
+ * `/events` の 4 種を各ビューのキャッシュへ配る。
+ * 失敗時の文言は各ビューの fetch 関数と揃える。
+ */
+function dispatchStreamEvent(e: SseEvent): void {
+  switch (e.event) {
+    case "message":
+      // 空文字は message.txt 未配置
+      void receiveMessageEvent(
+        e.data.length === 0
+          ? { ok: false, error: "メッセージ未配置" }
+          : { ok: true, data: e.data },
+      );
+      break;
+    case "usage": {
+      const v = parseJson(e.data);
+      void receiveUsageEvent(
+        isRecord(v) && "claude" in v
+          ? { ok: true, data: v as ChargeData }
+          : { ok: false, error: "進捗データ取得失敗" },
+      );
+      break;
+    }
+    case "rows": {
+      const v = parseJson(e.data);
+      void receiveRowsEvent(
+        Array.isArray(v)
+          ? { ok: true, data: v as GhdagRow[] }
+          : { ok: false, error: "ghdag UI に接続できません" },
+      );
+      break;
+    }
+    case "queue": {
+      const v = parseJson(e.data);
+      void receiveQueueEvent(
+        isRecord(v) && !("error" in v)
+          ? { ok: true, data: v as QueueData }
+          : { ok: false, error: "issuesmith queue 取得失敗" },
+      );
+      break;
+    }
+  }
+}
 
 async function main(): Promise<void> {
   log("3: main() entered");
@@ -134,6 +205,42 @@ async function main(): Promise<void> {
   void preloadCharge(config);
   log("8a: preload kicked (message / dashboard / charge)");
 
+  // ───────── charge_server `/events` (SSE) を 1 本だけ購読 ─────────
+  // 接続中は各ビューのポーリングを止め、未接続 / 購読不可の間だけ 60 秒の
+  // 保険ポーリングで取得する。
+  let streamConnected = false;
+  const setStreamConnected = (connected: boolean): void => {
+    streamConnected = connected;
+    log(`events: ${connected ? "connected" : "disconnected → fallback polling"}`);
+    setMessageStreamConnected(connected);
+    setDashboardStreamConnected(connected);
+  };
+  const events = subscribeEvents(config, dispatchStreamEvent, setStreamConnected);
+  if (events === null) {
+    log("8b: /events unavailable → fallback polling (60s)");
+    setStreamConnected(false);
+  } else {
+    log("8b: /events subscription started");
+  }
+
+  // フォアグラウンド復帰: 未接続なら再接続し、各ビューを 1 回取得する
+  const onForeground = (reason: string): void => {
+    log(`foreground (${reason})`);
+    if (events && !streamConnected) {
+      events.reconnect();
+    }
+    void refreshMessageOnce();
+    void refreshDashboardOnce(config);
+  };
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") {
+      onForeground("visibilitychange");
+    }
+  });
+  bridge.onLaunchSource((source) => {
+    onForeground(`launchSource=${source}`);
+  });
+
   // 右テンプルタップ間隔のデバウンス（同一タップで複数 event が飛ぶケースに備える）
   let lastTriggerAt = 0;
   const DEBOUNCE_MS = 400;
@@ -151,6 +258,10 @@ async function main(): Promise<void> {
         : "(none)";
     const textEvt = event.textEvent ? ` text=${JSON.stringify(event.textEvent)}` : "";
     log(`event: type=${typeName} source=${sourceName}${textEvt}`);
+
+    if (sys?.eventType === OsEventTypeList.FOREGROUND_ENTER_EVENT) {
+      onForeground("FOREGROUND_ENTER_EVENT");
+    }
 
     // 実機ログより、右テンプル シングルタップは
     //   { sysEvent: { eventSource: 1 } }  (eventType 欠落)

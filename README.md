@@ -54,6 +54,15 @@ npm run build
 | 状態行 | `run engine#issue` / `pause engine~HH:MM` / `HALT` / `idle` | `/issuesmith/queue` |
 | ghdag 集計 | 実行中 / 待機中 / 完了 / 失敗 | `/ghdag/rows` |
 
+## 更新方式
+
+表示は charge_server の `GET /events`（SSE）を購読して更新します。起動時に 1 本だけ接続し、`message` / `usage` / `rows` / `queue` の 4 種を各ビューへ配ります（反映は 1〜2 秒程度）。
+
+- 購読方式は `EventSource` → `fetch` ストリームの順に選びます。`fetch` ストリームは切断時に 3 秒後に再接続します
+- **接続中** は `/message` / `/ghdag/rows` などへのポーリングを行いません
+- **未接続**（接続失敗・切断中）や、どちらの方式も使えない環境では、**60 秒** 間隔の保険ポーリングで従来の各エンドポイントから取得します
+- フォアグラウンド復帰（`visibilitychange` / SDK の launch source・`FOREGROUND_ENTER_EVENT`）時は、未接続なら再接続し、各ビューを 1 回取得します
+
 ## `.ehpk` ビルド & サイドロード
 
 Even Hub への配布には `app.json` マニフェストと `.ehpk` パッケージが必要です。

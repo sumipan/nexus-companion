@@ -19,7 +19,9 @@ import { truncateToMaxWidth } from "../util/textWidth.ts";
  * (`textContainerUpgrade({content: ""})` は SDK で no-op になり前 view の
  * 描画が残るため半角スペース 1 個を送る)。
  *
- * 常時稼働ポーラーが新メッセージを検知したら message view へ自動切替する。
+ * 新メッセージは charge_server の `/events` (`message` イベント) で受け取り、
+ * 非表示中なら message view へ自動切替する。`/events` に接続できていない間だけ
+ * 60 秒の保険ポーリングで `/message` を取得する。
  * ステータス表示への復帰は state/view.ts の表示時間タイマーが担う。
  *
  * 実装メモ (経緯):
@@ -32,7 +34,7 @@ import { truncateToMaxWidth } from "../util/textWidth.ts";
 const CONTAINER_ID = 1;
 const CONTAINER_NAME = "main";
 const CLEAR_CONTENT = " "; // 空文字列は no-op になるので半角スペース 1 個で上書き
-const POLL_INTERVAL_MS = 30_000;
+const FALLBACK_POLL_INTERVAL_MS = 60_000;
 
 // preload cache
 let cachedMessage: Result<string> | null = null;
@@ -41,7 +43,12 @@ let inflightMessage: Promise<Result<string>> | null = null;
 // DI hook for testing
 let _fetchMessageImpl: (config: Config) => Promise<Result<string>> = fetchMessage;
 let _pollFn: (() => Promise<void>) | null = null;
+let _applyResultFn: ((result: Result<string>) => Promise<void>) | null = null;
 let _activateFn: (() => Promise<void>) | null = null;
+
+// 保険ポーリング: `/events` 未接続の間だけ動かす
+let streamConnected = false;
+let pollTimer: ReturnType<typeof setInterval> | undefined;
 
 /** @internal test only */
 export function __setFetchMessageForTest(fn: (config: Config) => Promise<Result<string>>): void {
@@ -53,10 +60,17 @@ export function __resetFetchMessageForTest(): void {
 }
 /** @internal test only */
 export function __resetMessageStateForTest(): void {
+  stopMessagePoller();
   cachedMessage = null;
   inflightMessage = null;
+  streamConnected = false;
   _pollFn = null;
+  _applyResultFn = null;
   _activateFn = null;
+}
+/** @internal test only */
+export function __isMessagePollingForTest(): boolean {
+  return pollTimer !== undefined;
 }
 /** @internal test only */
 export function __pollOnceForTest(): Promise<void> {
@@ -84,6 +98,41 @@ export function preloadMessage(config: Config): Promise<Result<string>> {
   return fetchMessageWithCache(config);
 }
 
+function startMessagePoller(): void {
+  if (pollTimer !== undefined || !_pollFn) return;
+  pollTimer = setInterval(() => {
+    void _pollFn?.();
+  }, FALLBACK_POLL_INTERVAL_MS);
+}
+
+function stopMessagePoller(): void {
+  if (pollTimer !== undefined) {
+    clearInterval(pollTimer);
+    pollTimer = undefined;
+  }
+}
+
+/** `/events` の接続状態。接続中はポーリングを止め、未接続時のみ 60 秒で取得する。 */
+export function setMessageStreamConnected(connected: boolean): void {
+  streamConnected = connected;
+  if (connected) {
+    stopMessagePoller();
+  } else {
+    startMessagePoller();
+  }
+}
+
+/** `/events` の `message` イベントの受信口。fetch 結果と同じ分岐に通す。 */
+export function receiveMessageEvent(result: Result<string>): Promise<void> {
+  cachedMessage = result;
+  return _applyResultFn ? _applyResultFn(result) : Promise.resolve();
+}
+
+/** フォアグラウンド復帰時などに 1 回だけ `/message` を取得する。 */
+export function refreshMessageOnce(): Promise<void> {
+  return _pollFn ? _pollFn() : Promise.resolve();
+}
+
 function resultToContent(result: Result<string>): string {
   if (result.ok) {
     const trimmed = result.data.replace(/\s+$/g, "");
@@ -103,7 +152,6 @@ export function registerMessageLifecycle(
   config: Config,
 ): () => void {
   let messageActive = false;
-  let pollTimer: ReturnType<typeof setInterval> | undefined;
   // 現在 glass に描画済みの content (表示中のみ有効)
   let lastContent: string | null = null;
   // 最後に「ユーザーへ提示した」content。新着判定の基準 (非表示中も保持)。
@@ -127,8 +175,7 @@ export function registerMessageLifecycle(
     }
   }
 
-  async function refresh(): Promise<void> {
-    const result = await fetchMessageWithCache(config);
+  async function applyResult(result: Result<string>): Promise<void> {
     const content = resultToContent(result);
 
     if (!messageActive) {
@@ -148,7 +195,12 @@ export function registerMessageLifecycle(
     }
   }
 
+  async function refresh(): Promise<void> {
+    await applyResult(await fetchMessageWithCache(config));
+  }
+
   _pollFn = refresh;
+  _applyResultFn = applyResult;
 
   async function activate(): Promise<void> {
     if (messageActive) return;
@@ -169,7 +221,7 @@ export function registerMessageLifecycle(
   function deactivate(): void {
     messageActive = false;
     lastContent = null;
-    // pollTimer は常時稼働のため止めない（背景での自動切替検出を継続）
+    // 保険ポーラー / `/events` は表示に関係なく動かす（背景での自動切替検出を継続）
     // lastSeenContent はリセットしない（同じメッセージでの再切替を防ぐ）
   }
 
@@ -181,10 +233,10 @@ export function registerMessageLifecycle(
     }
   });
 
-  // 常時稼働のバックグラウンドポーラー（message 非表示時も動作）
-  pollTimer = setInterval(() => {
-    void refresh();
-  }, POLL_INTERVAL_MS);
+  // `/events` 未接続の間だけ保険ポーラーを動かす（message 非表示時も動作）
+  if (!streamConnected) {
+    startMessagePoller();
+  }
 
   if (getView() === "message") {
     void activate();
@@ -193,9 +245,6 @@ export function registerMessageLifecycle(
   return () => {
     unsubscribe();
     deactivate();
-    if (pollTimer !== undefined) {
-      clearInterval(pollTimer);
-      pollTimer = undefined;
-    }
+    stopMessagePoller();
   };
 }
