@@ -95,24 +95,20 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 
 /**
  * Fan out the 4 `/events` types to each view's cache.
- * Error strings match those of each view's fetch function (src/api/*.ts).
+ * Malformed payloads are passed to each view as an error result.
  */
 function dispatchStreamEvent(e: SseEvent): void {
   switch (e.event) {
     case "message":
-      // empty string means message.txt is not present
-      void receiveMessageEvent(
-        e.data.length === 0
-          ? { ok: false, error: "\u30e1\u30c3\u30bb\u30fc\u30b8\u672a\u914d\u7f6e" }
-          : { ok: true, data: e.data },
-      );
+      // empty string means message.txt is not present; empty data clears the glass
+      void receiveMessageEvent({ ok: true, data: e.data });
       break;
     case "usage": {
       const v = parseJson(e.data);
       void receiveUsageEvent(
         isRecord(v) && "claude" in v
           ? { ok: true, data: v as ChargeData }
-          : { ok: false, error: "\u9032\u6357\u30c7\u30fc\u30bf\u53d6\u5f97\u5931\u6557" },
+          : { ok: false, error: "failed to fetch usage data" },
       );
       break;
     }
@@ -121,7 +117,7 @@ function dispatchStreamEvent(e: SseEvent): void {
       void receiveRowsEvent(
         Array.isArray(v)
           ? { ok: true, data: v as GhdagRow[] }
-          : { ok: false, error: "ghdag UI \u306b\u63a5\u7d9a\u3067\u304d\u307e\u305b\u3093" },
+          : { ok: false, error: "cannot connect to ghdag UI" },
       );
       break;
     }
@@ -130,7 +126,7 @@ function dispatchStreamEvent(e: SseEvent): void {
       void receiveQueueEvent(
         isRecord(v) && !("error" in v)
           ? { ok: true, data: v as QueueData }
-          : { ok: false, error: "issuesmith queue \u53d6\u5f97\u5931\u6557" },
+          : { ok: false, error: "failed to fetch issuesmith queue" },
       );
       break;
     }
